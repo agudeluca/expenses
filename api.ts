@@ -35,7 +35,6 @@ const getOrderBook = async (symbol: string) => {
 };
 
 const createLimitOrder = async (symbol: string, price: number, quantity: number, side: Side) => {
-  console.log('createLimitOrder', side);
   let order;
   try {
     if (side === 'buy') {
@@ -43,7 +42,6 @@ const createLimitOrder = async (symbol: string, price: number, quantity: number,
     } else {
       order = await binance.futuresSell(symbol, quantity, price);
     }
-    console.log(order)
     return order.orderId;
   } catch (error: any) {
     if (error.body.code === -5022) {
