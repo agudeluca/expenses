@@ -25,6 +25,16 @@ const getMarkPrice = async (symbol: string) => {
   }
 };
 
+
+const futuresPositionRisk = async (symbol: string) => {
+  try {
+    const account = await binance.futuresPositionRisk({symbol});
+    return account[0];
+  } catch (error) {
+    console.error('Error getting the account:', error);
+  }
+}
+
 const getOrderBook = async (symbol: string) => {
   try {
     const book: OrderBook = await binance.futuresDepth(symbol, { limit: 100 });
@@ -35,6 +45,7 @@ const getOrderBook = async (symbol: string) => {
 };
 
 const createLimitOrder = async (symbol: string, price: number, quantity: number, side: Side) => {
+  console.log('Creating order...', side);
   let order;
   try {
     if (side === 'buy') {
@@ -42,20 +53,32 @@ const createLimitOrder = async (symbol: string, price: number, quantity: number,
     } else {
       order = await binance.futuresSell(symbol, quantity, price);
     }
-    return order.orderId;
-  } catch (error: any) {
-    if (error.body.code === -5022) {
-      console.log('Retrying the order creation...');
+    //console.log('order data', order)
+    if (order.code === -5022) {
+      console.log('code -5022');
       return null;
     }
+    return order.orderId;
+  } catch (error: any) {
+
     console.error('Error creating the limit order:', error.body);
     return null;
   }
 };
 
-const checkOrderExecution = async (symbol: string, orderId: string): Promise<Order | null | undefined> => {
+const getAmountOfOrdersBySymbol = async (symbol: string): Promise<number | undefined> => {
+  try {
+    const orders: Order[] = await binance.futuresOpenOrders(symbol);
+    return orders.length;
+  } catch (error) {
+    console.error('Error checking order status:', error);
+  }
+};
+
+const checkOrderById = async (symbol: string, orderId: string): Promise<Order | null | undefined> => {
   try {
     const orders: Order[] = await binance.futuresAllOrders(symbol, { orderId });
+    console.log(orders.length, 'orders')
     return orders.length ? orders[0] : null;
   } catch (error) {
     console.error('Error checking order status:', error);
@@ -78,9 +101,12 @@ const getPriceInOrderBook = (orderBook: OrderBook, quantity: number, side: Side)
   return price;
 };
 
-const futuresCancel = async (symbol: string, origClientOrderId: string) => {
+const futuresCancel = async (symbol: string, origClientOrderId: string): Promise<Order | null | undefined> => {
   try {
     const order = await binance.futuresCancel(symbol, { origClientOrderId });
+    if (order.code === -2011) {
+      return null;
+    }
     return order;
   } catch (error) {
     console.error('Error checking order status:', error);
@@ -88,11 +114,13 @@ const futuresCancel = async (symbol: string, origClientOrderId: string) => {
 };
 
 export {
+  getAmountOfOrdersBySymbol,
   getMarkPrice,
   getSymbolExchangeInfo,
   getOrderBook,
   createLimitOrder,
-  checkOrderExecution,
+  checkOrderById,
   getPriceInOrderBook,
   futuresCancel,
+  futuresPositionRisk,
 }
