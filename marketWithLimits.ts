@@ -88,6 +88,7 @@ const marketWithlimit = async ({
         continue;
       }
       console.log('Order not canceled, FILLED');
+      return;
     }
   }
 };
