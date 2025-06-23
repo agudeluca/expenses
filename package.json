@@ -3,7 +3,14 @@
   "version": "1.0.0",
   "scripts": {
     "start-watch": "npx nodemon index.ts",
-    "start": "npx ts-node index.ts"
+    "start": "npx ts-node index.ts",
+    "cv-analysis": "npx ts-node cv-analysis.ts",
+    "cv-sample": "npx ts-node cv-sample.ts",
+    "cv-1h": "npx ts-node cv-analysis.ts 1h",
+    "cv-4h": "npx ts-node cv-analysis.ts 4h",
+    "cv-8h": "npx ts-node cv-analysis.ts 8h",
+    "cv-12h": "npx ts-node cv-analysis.ts 12h",
+    "cv-1d": "npx ts-node cv-analysis.ts 1d"
   },
   "devDependencies": {
     "@types/node": "^20.14.2",
