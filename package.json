@@ -2,14 +2,6 @@
   "name": "your-project-name",
   "version": "1.0.0",
   "scripts": {
-    "start-watch": "npx nodemon index.ts",
-    "start": "npx ts-node index.ts",
-    "cv-8h": "npx ts-node cv-analisis/cv-analysis.ts 8h",
-    "cv-12h": "npx ts-node cv-analisis/cv-analysis.ts 12h",
-    "cv-1d": "npx ts-node cv-analisis/cv-analysis.ts 1d",
-    "corr-4h": "npx ts-node correlation/correlation-analysis.ts 4h",
-    "corr-12h": "npx ts-node correlation/correlation-analysis.ts 12h",
-    "corr-1d": "npx ts-node correlation/correlation-analysis.ts 1d",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"
