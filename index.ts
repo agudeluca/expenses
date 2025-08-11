@@ -15,6 +15,7 @@ async function main() {
     console.log("Usage: npm start <symbol> <quantity> <side> <isCoin>");
     console.log("Example: npm start BTCUSDT 0.001 buy false");
     console.log("For CV analysis, run: npm run cv-analysis");
+    console.log("For correlation analysis, run: npm run corr-analysis");
   }
 }
 

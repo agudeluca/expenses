@@ -4,19 +4,22 @@
   "scripts": {
     "start-watch": "npx nodemon index.ts",
     "start": "npx ts-node index.ts",
-    "cv-analysis": "npx ts-node cv-analysis.ts",
-    "cv-sample": "npx ts-node cv-sample.ts",
-    "cv-1h": "npx ts-node cv-analysis.ts 1h",
-    "cv-4h": "npx ts-node cv-analysis.ts 4h",
-    "cv-8h": "npx ts-node cv-analysis.ts 8h",
-    "cv-12h": "npx ts-node cv-analysis.ts 12h",
-    "cv-1d": "npx ts-node cv-analysis.ts 1d"
+    "cv-8h": "npx ts-node cv-analisis/cv-analysis.ts 8h",
+    "cv-12h": "npx ts-node cv-analisis/cv-analysis.ts 12h",
+    "cv-1d": "npx ts-node cv-analisis/cv-analysis.ts 1d",
+    "corr-4h": "npx ts-node correlation/correlation-analysis.ts 4h",
+    "corr-12h": "npx ts-node correlation/correlation-analysis.ts 12h",
+    "corr-1d": "npx ts-node correlation/correlation-analysis.ts 1d",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@types/node": "^20.14.2",
     "nodemon": "^3.1.3",
     "ts-node": "^10.9.2",
-    "typescript": "^4.9.5"
+    "typescript": "^4.9.5",
+    "vitest": "^1.4.0"
   },
   "dependencies": {
     "bignumber.js": "^9.1.2",

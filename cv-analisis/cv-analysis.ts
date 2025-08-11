@@ -266,7 +266,7 @@ function displayTable(results: CoefficientResult[], interval: string) {
   }
 }
 
-async function main() {
+async function calculateCV() {
   try {
     // Get interval from command line arguments, default to 12h
     const interval = process.argv[2] || "12h";
@@ -328,4 +328,4 @@ async function main() {
 }
 
 // Run the analysis
-main().catch(console.error);
+calculateCV().catch(console.error);
