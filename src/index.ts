@@ -32,7 +32,7 @@ export function parseCSV(csvContent: string): Transaction[] {
   if (lines.length <= 1) return [];
 
   return lines.slice(1).map((line) => {
-    const values = line.split(";");
+    const values = line.split(",");
     return {
       originalCurrency: values[0] || "",
       originalAmount: parseFloat(values[1]) || 0,
@@ -157,7 +157,7 @@ export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
 
 export function main(): void {
   try {
-    const csvPath = path.join(__dirname, "data", "transactions.csv");
+    const csvPath = path.join(__dirname, "data", "card-transactions.csv");
 
     if (!fs.existsSync(csvPath)) {
       console.error(
