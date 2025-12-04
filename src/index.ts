@@ -39,16 +39,16 @@ export function parseCSV(csvContent: string): Transaction[] {
       USDAmount: parseFloat(values[2]) || 0,
       date: values[3] || "",
       mcc: values[4] || "",
-      merchantName: values[5] || "",
-      merchantCountry: values[6] || "",
-      status: values[7] || "",
-      declineReason: values[8] || "",
-      authCode: values[9] || "",
-      type: values[10] || "",
-      externalTxId: values[11] || "",
-      externalRootTxId: values[12] || "",
-      apiTransaction: values[13] || "",
-      last4: values[14] || "",
+      merchantName: values[7] || "", // Changed from 5 to 7 (accountAmount and accountCurrency added)
+      merchantCountry: values[8] || "", // Changed from 6 to 8
+      status: values[9] || "", // Changed from 7 to 9
+      declineReason: values[10] || "", // Changed from 8 to 10
+      authCode: values[11] || "", // Changed from 9 to 11
+      type: values[12] || "", // Changed from 10 to 12
+      externalTxId: values[13] || "", // Changed from 11 to 13
+      externalRootTxId: values[14] || "", // Changed from 12 to 14
+      apiTransaction: values[15] || "", // Changed from 13 to 15
+      last4: values[16] || "", // Changed from 14 to 16
     };
   });
 }
