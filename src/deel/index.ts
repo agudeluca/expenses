@@ -1,5 +1,14 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  formatDate,
+  groupByWeek,
+  WeeklyGroup,
+  NormalizedTransaction,
+} from "../shared";
+
+export { getWeekStart, getWeekEnd, formatDate, groupByWeek } from "../shared";
+export type { WeeklyGroup } from "../shared";
 
 export interface Transaction {
   originalCurrency: string;
@@ -19,13 +28,7 @@ export interface Transaction {
   last4: string;
 }
 
-export interface WeeklyExpense {
-  weekStart: string;
-  weekEnd: string;
-  totalUSD: number;
-  transactionCount: number;
-  transactions: Transaction[];
-}
+export type WeeklyExpense = WeeklyGroup<Transaction>;
 
 export function parseCSV(csvContent: string): Transaction[] {
   const lines = csvContent.trim().split("\n");
@@ -39,74 +42,40 @@ export function parseCSV(csvContent: string): Transaction[] {
       USDAmount: parseFloat(values[2]) || 0,
       date: values[3] || "",
       mcc: values[4] || "",
-      merchantName: values[7] || "", // Changed from 5 to 7 (accountAmount and accountCurrency added)
-      merchantCountry: values[8] || "", // Changed from 6 to 8
-      status: values[9] || "", // Changed from 7 to 9
-      declineReason: values[10] || "", // Changed from 8 to 10
-      authCode: values[11] || "", // Changed from 9 to 11
-      type: values[12] || "", // Changed from 10 to 12
-      externalTxId: values[13] || "", // Changed from 11 to 13
-      externalRootTxId: values[14] || "", // Changed from 12 to 14
-      apiTransaction: values[15] || "", // Changed from 13 to 15
-      last4: values[16] || "", // Changed from 14 to 16
+      merchantName: values[7] || "",
+      merchantCountry: values[8] || "",
+      status: values[9] || "",
+      declineReason: values[10] || "",
+      authCode: values[11] || "",
+      type: values[12] || "",
+      externalTxId: values[13] || "",
+      externalRootTxId: values[14] || "",
+      apiTransaction: values[15] || "",
+      last4: values[16] || "",
     };
   });
 }
 
-export function getWeekStart(date: Date): Date {
-  const d = new Date(date.getTime()); // Create a new date object to avoid mutation
-  const day = d.getUTCDay(); // Use UTC day to avoid timezone issues
-
-  if (day === 0) {
-    // Sunday - go to next Monday
-    d.setUTCDate(d.getUTCDate() + 1);
-  } else if (day > 1) {
-    // Tuesday through Saturday - go back to Monday
-    d.setUTCDate(d.getUTCDate() - (day - 1));
-  }
-  // Monday stays as Monday
-
-  return d;
-}
-
-export function getWeekEnd(weekStart: Date): Date {
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekStart.getDate() + 6);
-  return weekEnd;
-}
-
-export function formatDate(date: Date): string {
-  return date.toISOString().split("T")[0];
-}
-
-export function groupByWeek(transactions: Transaction[]): WeeklyExpense[] {
-  const weeklyMap = new Map<string, WeeklyExpense>();
-
-  transactions.forEach((transaction) => {
-    const transactionDate = new Date(transaction.date);
-    const weekStart = getWeekStart(transactionDate);
-    const weekKey = formatDate(weekStart);
-
-    if (!weeklyMap.has(weekKey)) {
-      weeklyMap.set(weekKey, {
-        weekStart: formatDate(weekStart),
-        weekEnd: formatDate(getWeekEnd(weekStart)),
-        totalUSD: 0,
-        transactionCount: 0,
-        transactions: [],
-      });
-    }
-
-    const weekData = weeklyMap.get(weekKey)!;
-    weekData.totalUSD += transaction.USDAmount;
-    weekData.transactionCount += 1;
-    weekData.transactions.push(transaction);
+export function toNormalized(rows: Transaction[]): NormalizedTransaction[] {
+  return rows.map((t) => {
+    const signedAmount =
+      t.type === "REFUND" ? -t.originalAmount : t.originalAmount;
+    return {
+      date: t.date.slice(0, 10),
+      description: t.merchantName,
+      amount: signedAmount,
+      currency: t.originalCurrency,
+      source: "deel",
+      meta: {
+        mcc: t.mcc,
+        merchantCountry: t.merchantCountry,
+        status: t.status,
+        last4: t.last4,
+        type: t.type,
+        USDAmount: t.USDAmount,
+      },
+    };
   });
-
-  // Convert map to array and sort by week start date
-  return Array.from(weeklyMap.values()).sort(
-    (a, b) => new Date(a.weekStart).getTime() - new Date(b.weekStart).getTime()
-  );
 }
 
 export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
@@ -115,10 +84,9 @@ export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
 
   weeklyExpenses.forEach((week) => {
     console.log(`\n📅 Week of ${week.weekStart} to ${week.weekEnd}`);
-    console.log(`💰 Total: $${week.totalUSD.toFixed(2)}`);
+    console.log(`💰 Total: $${week.total.toFixed(2)}`);
     console.log(`📝 Transactions: ${week.transactionCount}`);
 
-    // Show top 3 transactions by amount
     const topTransactions = week.transactions.sort(
       (a, b) => b.USDAmount - a.USDAmount
     );
@@ -137,9 +105,8 @@ export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
     console.log("-".repeat(40));
   });
 
-  // Summary statistics
   const totalAmount = weeklyExpenses.reduce(
-    (sum, week) => sum + week.totalUSD,
+    (sum, week) => sum + week.total,
     0
   );
   const totalTransactions = weeklyExpenses.reduce(
@@ -157,7 +124,7 @@ export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
 
 export function main(): void {
   try {
-    const csvPath = path.join(__dirname, "data", "card-transactions.csv");
+    const csvPath = path.join(__dirname, "..", "data-deel", "card-transactions.csv");
 
     if (!fs.existsSync(csvPath)) {
       console.error(
@@ -176,14 +143,17 @@ export function main(): void {
 
     console.log(`📄 Loaded ${transactions.length} transactions from CSV`);
 
-    const weeklyExpenses = groupByWeek(transactions);
+    const weeklyExpenses = groupByWeek(
+      transactions,
+      (t) => new Date(t.date),
+      (t) => t.USDAmount
+    );
     displayWeeklyExpenses(weeklyExpenses);
   } catch (error) {
     console.error("❌ Error processing transactions:", error);
   }
 }
 
-// Run the script if this file is executed directly
 if (require.main === module) {
   main();
 }

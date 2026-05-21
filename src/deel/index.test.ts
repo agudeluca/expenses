@@ -7,6 +7,7 @@ import {
   getWeekEnd,
   formatDate,
   groupByWeek,
+  toNormalized,
   type Transaction,
   type WeeklyExpense,
 } from "./index";
@@ -146,22 +147,26 @@ describe("Weekly Expenses Script", () => {
         },
       ];
 
-      const weeklyExpenses = groupByWeek(transactions);
+      const weeklyExpenses = groupByWeek(transactions, (t) => new Date(t.date), (t) => t.USDAmount);
 
       expect(weeklyExpenses).toHaveLength(2);
       expect(weeklyExpenses[0].weekStart).toBe("2025-08-11");
       expect(weeklyExpenses[0].weekEnd).toBe("2025-08-17");
-      expect(weeklyExpenses[0].totalUSD).toBe(58.32); // 7.97 + 50.35
+      expect(weeklyExpenses[0].total).toBe(58.32); // 7.97 + 50.35
       expect(weeklyExpenses[0].transactionCount).toBe(2);
 
       expect(weeklyExpenses[1].weekStart).toBe("2025-08-18");
       expect(weeklyExpenses[1].weekEnd).toBe("2025-08-24");
-      expect(weeklyExpenses[1].totalUSD).toBe(7.97);
+      expect(weeklyExpenses[1].total).toBe(7.97);
       expect(weeklyExpenses[1].transactionCount).toBe(1);
     });
 
     it("should handle empty transactions array", () => {
-      const weeklyExpenses = groupByWeek([]);
+      const weeklyExpenses = groupByWeek<Transaction>(
+        [],
+        (t) => new Date(t.date),
+        (t) => t.USDAmount
+      );
       expect(weeklyExpenses).toHaveLength(0);
     });
 
@@ -177,7 +182,7 @@ describe("Weekly Expenses Script", () => {
         },
       ];
 
-      const weeklyExpenses = groupByWeek(transactions);
+      const weeklyExpenses = groupByWeek(transactions, (t) => new Date(t.date), (t) => t.USDAmount);
 
       expect(weeklyExpenses[0].weekStart).toBe("2025-08-11");
       expect(weeklyExpenses[1].weekStart).toBe("2025-08-18");
@@ -186,12 +191,12 @@ describe("Weekly Expenses Script", () => {
 
   describe("Integration Tests", () => {
     it("should process real CSV file correctly", () => {
-      const csvPath = path.join(__dirname, "data", "transactions.csv");
+      const csvPath = path.join(__dirname, "..", "data-deel", "card-transactions.csv");
 
       if (fs.existsSync(csvPath)) {
         const csvContent = fs.readFileSync(csvPath, "utf-8");
         const transactions = parseCSV(csvContent);
-        const weeklyExpenses = groupByWeek(transactions);
+        const weeklyExpenses = groupByWeek(transactions, (t) => new Date(t.date), (t) => t.USDAmount);
 
         // Basic validation
         expect(transactions.length).toBeGreaterThan(0);
@@ -201,14 +206,14 @@ describe("Weekly Expenses Script", () => {
         weeklyExpenses.forEach((week) => {
           expect(week.weekStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
           expect(week.weekEnd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-          expect(week.totalUSD).toBeGreaterThanOrEqual(0);
+          expect(week.total).toBeGreaterThanOrEqual(0);
           expect(week.transactionCount).toBeGreaterThan(0);
           expect(week.transactions.length).toBe(week.transactionCount);
         });
 
         // Validate total amounts match
         const totalFromWeeks = weeklyExpenses.reduce(
-          (sum, week) => sum + week.totalUSD,
+          (sum, week) => sum + week.total,
           0
         );
         const totalFromTransactions = transactions.reduce(
@@ -233,8 +238,8 @@ describe("Weekly Expenses Script", () => {
         },
       ];
 
-      const weeklyExpenses = groupByWeek(transactions);
-      expect(weeklyExpenses[0].totalUSD).toBe(10.5);
+      const weeklyExpenses = groupByWeek(transactions, (t) => new Date(t.date), (t) => t.USDAmount);
+      expect(weeklyExpenses[0].total).toBe(10.5);
     });
 
     it("should handle negative amounts (refunds)", () => {
@@ -249,8 +254,8 @@ describe("Weekly Expenses Script", () => {
         },
       ];
 
-      const weeklyExpenses = groupByWeek(transactions);
-      expect(weeklyExpenses[0].totalUSD).toBe(42.38); // -7.97 + 50.35
+      const weeklyExpenses = groupByWeek(transactions, (t) => new Date(t.date), (t) => t.USDAmount);
+      expect(weeklyExpenses[0].total).toBe(42.38); // -7.97 + 50.35
     });
 
     it("should handle malformed CSV gracefully", () => {
@@ -259,6 +264,56 @@ EUR;6.75;7.97;2025-08-11T11:31:28.217Z
 EUR;42.6;50.35;2025-08-11T09:47:51.658Z;4111;METRO BARCELONA`; // Missing fields
 
       expect(() => parseCSV(malformedCSV)).not.toThrow();
+    });
+  });
+
+  describe("toNormalized", () => {
+    const baseTx: Transaction = {
+      originalCurrency: "EUR",
+      originalAmount: 10,
+      USDAmount: 11,
+      date: "2025-08-11T11:31:28.217Z",
+      mcc: "5411",
+      merchantName: "MERCADONA",
+      merchantCountry: "ES",
+      status: "APPROVED",
+      declineReason: "",
+      authCode: "ABC123",
+      type: "POS_TX",
+      externalTxId: "tx-1",
+      externalRootTxId: "tx-1",
+      apiTransaction: "{}",
+      last4: "6530",
+    };
+
+    it("emits a positive-amount NT for a POS_TX in originalCurrency", () => {
+      const [nt] = toNormalized([baseTx]);
+      expect(nt.amount).toBe(10);
+      expect(nt.currency).toBe("EUR");
+      expect(nt.source).toBe("deel");
+      expect(nt.description).toBe("MERCADONA");
+    });
+
+    it("inverts sign on REFUND", () => {
+      const [nt] = toNormalized([{ ...baseTx, type: "REFUND" }]);
+      expect(nt.amount).toBe(-10);
+    });
+
+    it("trims date to YYYY-MM-DD", () => {
+      const [nt] = toNormalized([baseTx]);
+      expect(nt.date).toBe("2025-08-11");
+    });
+
+    it("populates meta with mcc, country, status, last4, type, USDAmount", () => {
+      const [nt] = toNormalized([baseTx]);
+      expect(nt.meta).toEqual({
+        mcc: "5411",
+        merchantCountry: "ES",
+        status: "APPROVED",
+        last4: "6530",
+        type: "POS_TX",
+        USDAmount: 11,
+      });
     });
   });
 });
