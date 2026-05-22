@@ -14,10 +14,16 @@ interface Props {
   setSources: (s: Set<Source>) => void;
   currencies: Set<string>;
   setCurrencies: (s: Set<string>) => void;
+  hideIncome: boolean;
+  setHideIncome: (v: boolean) => void;
   availableCurrencies: string[];
   hasActiveFilters: boolean;
   reset: () => void;
   totalCount: number;
+  dismissedCount: number;
+  showDismissed: boolean;
+  setShowDismissed: (v: boolean) => void;
+  clearDismissed: () => void;
 }
 
 export function TopBar({
@@ -27,10 +33,16 @@ export function TopBar({
   setSources,
   currencies,
   setCurrencies,
+  hideIncome,
+  setHideIncome,
   availableCurrencies,
   hasActiveFilters,
   reset,
   totalCount,
+  dismissedCount,
+  showDismissed,
+  setShowDismissed,
+  clearDismissed,
 }: Props): JSX.Element {
   function toggle<T>(set: Set<T>, value: T): Set<T> {
     const next = new Set(set);
@@ -40,141 +52,111 @@ export function TopBar({
   }
 
   return (
-    <div
-      style={{
-        padding: "14px 18px",
-        borderBottom: "1px solid var(--border)",
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        position: "sticky",
-        top: 0,
-        background: "var(--bg)",
-        zIndex: 10,
-      }}
-    >
-      <div style={{ fontWeight: 600, fontSize: 15 }}>💸 expenses</div>
-      <input
-        style={{ flex: 1, minWidth: 200 }}
-        placeholder="Buscar por descripción…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+    <div className="topbar">
+      <div className="topbar-row">
+        <div className="brand">💸 expenses</div>
+        <input
+          className="search"
+          placeholder="Buscar por descripción…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
 
-      <FilterDropdown
-        label="Fuente"
-        all={ALL_SOURCES}
-        labels={SOURCE_LABEL}
-        selected={sources}
-        onToggle={(v) => setSources(toggle(sources, v))}
-      />
+      <div className="filter-group">
+        <span className="filter-group-label">Fuente</span>
+        <ChipGroup
+          all={ALL_SOURCES}
+          labels={SOURCE_LABEL}
+          selected={sources}
+          onToggle={(v) => setSources(toggle(sources, v))}
+        />
+      </div>
 
-      <FilterDropdown
-        label="Moneda"
-        all={availableCurrencies}
-        selected={currencies}
-        onToggle={(v) => setCurrencies(toggle(currencies, v))}
-      />
+      <div className="filter-group">
+        <span className="filter-group-label">Moneda</span>
+        <ChipGroup
+          all={availableCurrencies}
+          selected={currencies}
+          onToggle={(v) => setCurrencies(toggle(currencies, v))}
+        />
+      </div>
 
-      <span className="muted" style={{ fontSize: 12 }}>
-        {totalCount} txs
-      </span>
+      <div className="topbar-row">
+        <label className="pill">
+          <input
+            type="checkbox"
+            checked={hideIncome}
+            onChange={(e) => setHideIncome(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          Sólo gastos
+        </label>
 
-      {hasActiveFilters && (
-        <button onClick={reset} style={{ fontSize: 12 }}>
-          Reset
-        </button>
-      )}
+        {dismissedCount > 0 && (
+          <label className="pill">
+            <input
+              type="checkbox"
+              checked={showDismissed}
+              onChange={(e) => setShowDismissed(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            Ver descartados ({dismissedCount})
+          </label>
+        )}
+
+        <span className="muted" style={{ fontSize: 12 }}>
+          {totalCount} txs
+        </span>
+
+        {hasActiveFilters && (
+          <button onClick={reset} style={{ fontSize: 12 }}>
+            Reset
+          </button>
+        )}
+        {dismissedCount > 0 && (
+          <button
+            onClick={clearDismissed}
+            style={{ fontSize: 12 }}
+            title="Restaurar todos los descartados"
+          >
+            Limpiar descartes
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
-interface FilterDropdownProps<T extends string> {
-  label: string;
+interface ChipGroupProps<T extends string> {
   all: readonly T[];
   labels?: Record<string, string>;
   selected: Set<T>;
   onToggle: (value: T) => void;
 }
 
-function FilterDropdown<T extends string>({
-  label,
+function ChipGroup<T extends string>({
   all,
   labels,
   selected,
   onToggle,
-}: FilterDropdownProps<T>): JSX.Element {
+}: ChipGroupProps<T>): JSX.Element {
   return (
-    <details
-      style={{ position: "relative" }}
-      onToggle={(e) => {
-        // close on outside click is handled by browser
-        void e;
-      }}
-    >
-      <summary
-        style={{
-          listStyle: "none",
-          cursor: "pointer",
-          background: "var(--bg-input)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: 6,
-          padding: "6px 10px",
-          fontSize: 12,
-          userSelect: "none",
-        }}
-      >
-        {label}
-        {selected.size > 0 ? ` (${selected.size})` : ""} ▾
-      </summary>
-      <div
-        style={{
-          position: "absolute",
-          right: 0,
-          top: "calc(100% + 4px)",
-          background: "var(--bg-elev)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: 6,
-          padding: 6,
-          minWidth: 150,
-          zIndex: 20,
-          boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
-        }}
-      >
-        {all.map((v) => {
-          const checked = selected.has(v);
-          return (
-            <label
-              key={v}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "4px 6px",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-              onMouseEnter={(e) =>
-                ((e.currentTarget as HTMLElement).style.background =
-                  "var(--bg-input)")
-              }
-              onMouseLeave={(e) =>
-                ((e.currentTarget as HTMLElement).style.background =
-                  "transparent")
-              }
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => onToggle(v)}
-                style={{ margin: 0 }}
-              />
-              {labels?.[v] ?? v}
-            </label>
-          );
-        })}
-      </div>
-    </details>
+    <div className="chip-group">
+      {all.map((v) => {
+        const active = selected.has(v);
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onToggle(v)}
+            className="filter-chip"
+            data-active={active ? "true" : undefined}
+          >
+            {labels?.[v] ?? v}
+          </button>
+        );
+      })}
+    </div>
   );
 }

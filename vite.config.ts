@@ -5,5 +5,5 @@ export default defineConfig({
   root: "web",
   publicDir: "public",
   plugins: [react()],
-  server: { port: 5173, open: true },
+  server: { host: true, port: 5173, open: true },
 });

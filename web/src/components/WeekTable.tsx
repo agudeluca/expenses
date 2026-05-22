@@ -1,3 +1,4 @@
+import type { NormalizedTransaction } from "../types";
 import type { WeekGroup } from "../hooks/useGroupedByWeek";
 import type { SortBy, SortDir } from "../hooks/useFilters";
 import { WeekHeader } from "./WeekHeader";
@@ -8,6 +9,8 @@ interface Props {
   sortBy: SortBy;
   sortDir: SortDir;
   toggleSort: (col: SortBy) => void;
+  isDismissed: (t: NormalizedTransaction) => boolean;
+  toggleDismiss: (t: NormalizedTransaction) => void;
 }
 
 export function WeekTable({
@@ -15,6 +18,8 @@ export function WeekTable({
   sortBy,
   sortDir,
   toggleSort,
+  isDismissed,
+  toggleDismiss,
 }: Props): JSX.Element {
   if (weeks.length === 0) {
     return (
@@ -38,7 +43,12 @@ export function WeekTable({
         <div key={w.weekStart}>
           <WeekHeader group={w} />
           {w.transactions.map((tx, i) => (
-            <TxRow key={`${w.weekStart}-${i}`} tx={tx} />
+            <TxRow
+              key={`${w.weekStart}-${i}`}
+              tx={tx}
+              dismissed={isDismissed(tx)}
+              onToggleDismiss={() => toggleDismiss(tx)}
+            />
           ))}
         </div>
       ))}
@@ -59,37 +69,34 @@ function ColumnHeaders({
     sortBy === col ? (sortDir === "asc" ? " ↑" : " ↓") : "";
   return (
     <div
+      className="tx-grid tx-grid-headers"
       style={{
-        padding: "8px 18px",
-        display: "grid",
-        gridTemplateColumns: "96px 90px 1fr 130px 60px",
-        gap: 12,
         color: "var(--text-muted)",
         fontSize: 11,
         textTransform: "uppercase",
         letterSpacing: "0.04em",
         borderBottom: "1px solid var(--border)",
-        position: "sticky",
-        top: 51,
         background: "var(--bg)",
-        zIndex: 6,
       }}
     >
+      <div className="col-check" />
       <button
         onClick={() => toggleSort("date")}
         style={{ textAlign: "left" }}
+        className="col-date"
       >
         Fecha{arrow("date")}
       </button>
-      <div>Fuente</div>
-      <div>Descripción</div>
+      <div className="col-source">Fuente</div>
+      <div className="col-desc">Descripción</div>
       <button
         onClick={() => toggleSort("amount")}
         style={{ textAlign: "right" }}
+        className="col-amount"
       >
         Monto{arrow("amount")}
       </button>
-      <div>Mon.</div>
+      <div className="col-currency">Mon.</div>
     </div>
   );
 }
