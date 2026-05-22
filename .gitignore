@@ -3,3 +3,5 @@ node_modules
 src/data-galicia/*
 src/data-deel/*
 src/data-credito/*
+.superpowers/
+web/public/data.json
