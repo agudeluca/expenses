@@ -1,203 +1,164 @@
 import { describe, it, expect } from "vitest";
-import { groupByWeek } from "../shared";
+import { TextRow } from "../pdf/extract";
 import {
-  parseGaliciaCSV,
-  tokenizeCSV,
+  parseGaliciaRows,
   toNormalized,
+  findGaliciaTotal,
+  galiciaTotals,
   type GaliciaTransaction,
 } from "./index";
 
-const META = [
-  "Banco Galicia - Caja Ahorro Pesos,,,,,",
-  "Nro. de Cuenta: ...0083588,,,,,",
-  "Fecha Actual: 20/5/2026,,,,,",
-  "Hora Actual: 21:49,,,,,",
-  "Intervalo de Consulta: del 01/05/2026 al 21/05/2026,,,,,",
-].join("\n");
-
-const HEADER = "Fecha,Movimiento,Débito,Crédito,Saldo Parcial,Comentarios";
-
-function csv(...dataRows: string[]): string {
-  return [META, HEADER, ...dataRows].join("\n");
+// Helper: arma una fila a partir de pares [x, texto]. (`y`/`page` no importan
+// para el parser puro: itera las filas en orden.)
+function row(...tokens: [number, string][]): TextRow {
+  return { page: 1, y: 0, tokens: tokens.map(([x, str]) => ({ x, str })) };
 }
 
-describe("tokenizeCSV", () => {
-  it("handles quoted fields with embedded newlines", () => {
-    const text = `a,"b\nc",d\ne,f,g`;
-    const rows = tokenizeCSV(text);
-    expect(rows).toEqual([
-      ["a", "b\nc", "d"],
-      ["e", "f", "g"],
+const HEADER = row(
+  [38, "Fecha"],
+  [82, "Descripción"],
+  [224, "Origen"],
+  [308, "Crédito"],
+  [425, "Débito"],
+  [542, "Saldo"]
+);
+
+describe("parseGaliciaRows", () => {
+  it("parsea un débito (gasto) con saldo a la derecha", () => {
+    const txs = parseGaliciaRows([
+      HEADER,
+      row(
+        [38, "03/02/26"],
+        [82, "TRANSFERENCIA A TERCEROS"],
+        [423, "-76.000,00"],
+        [539, "10.225,85"]
+      ),
+    ]);
+    expect(txs).toEqual<GaliciaTransaction[]>([
+      {
+        date: "2026-02-03",
+        description: "TRANSFERENCIA A TERCEROS",
+        debit: 76000,
+        credit: 0,
+        balance: 10225.85,
+      },
     ]);
   });
 
-  it("handles escaped quotes", () => {
-    const text = `"he said ""hi""",end`;
-    const rows = tokenizeCSV(text);
-    expect(rows).toEqual([['he said "hi"', "end"]]);
+  it("parsea un crédito (ingreso)", () => {
+    const [tx] = parseGaliciaRows([
+      HEADER,
+      row(
+        [38, "03/02/26"],
+        [82, "CREDITO TRANSFERENCIA"],
+        [312, "30.000,00"],
+        [538, "86.225,85"]
+      ),
+    ]);
+    expect(tx.credit).toBe(30000);
+    expect(tx.debit).toBe(0);
+    expect(tx.balance).toBe(86225.85);
   });
-});
 
-describe("parseGaliciaCSV", () => {
-  it("skips metadata rows and parses one transaction", () => {
-    const input = csv(
-      `20/05/2026," DEB. AUTOM. DE SERV.\n ARCA (EX AFIP)\n","-81.541,85","0,00","144553,06",`
+  it("no incluye la fecha en la descripción", () => {
+    const [tx] = parseGaliciaRows([
+      HEADER,
+      row([38, "03/02/26"], [82, "PAGO TARJETA VISA"], [421, "-116.802,91"], [536, "110.172,86"]),
+    ]);
+    expect(tx.description).toBe("PAGO TARJETA VISA");
+  });
+
+  it("anexa las líneas de detalle (continuación) a la descripción", () => {
+    const [tx] = parseGaliciaRows([
+      HEADER,
+      row([38, "03/02/26"], [82, "CREDITO TRANSFERENCIA"], [312, "30.000,00"], [538, "86.225,85"]),
+      row([82, "COELSA"]),
+      row([82, "DE LUCA JOSE MARIA"]),
+      row([82, "20076319619"]),
+    ]);
+    expect(tx.description).toBe(
+      "CREDITO TRANSFERENCIA | COELSA | DE LUCA JOSE MARIA | 20076319619"
     );
-    const txs = parseGaliciaCSV(input);
+  });
+
+  it("corta los movimientos en la fila Total", () => {
+    const txs = parseGaliciaRows([
+      HEADER,
+      row([38, "03/02/26"], [82, "A"], [423, "-100,00"], [538, "900,00"]),
+      row([57, "Total"], [292, "$ 2.035.471,30"], [402, "-$ 1.998.255,50"], [532, "$ 93.441,65"]),
+      row([38, "05/02/26"], [82, "B (no debería parsearse)"], [423, "-50,00"], [538, "850,00"]),
+    ]);
     expect(txs).toHaveLength(1);
-    expect(txs[0]).toEqual<GaliciaTransaction>({
-      date: "2026-05-20",
-      description: "DEB. AUTOM. DE SERV. | ARCA (EX AFIP)",
-      debit: 81541.85,
-      credit: 0,
-      balance: 144553.06,
-      comments: "",
-    });
+    expect(txs[0].description).toBe("A");
   });
 
-  it("parses a credit-only transaction", () => {
-    const input = csv(
-      `20/05/2026," TRANSFERENCIA DE TERCEROS\n CAREAGA","0,00","221.056,24","254094,91",`
-    );
-    const txs = parseGaliciaCSV(input);
-    expect(txs).toHaveLength(1);
-    expect(txs[0].debit).toBe(0);
-    expect(txs[0].credit).toBe(221056.24);
-    expect(txs[0].description).toBe("TRANSFERENCIA DE TERCEROS | CAREAGA");
+  it("acepta año de 4 dígitos también", () => {
+    const [tx] = parseGaliciaRows([
+      HEADER,
+      row([38, "04/05/2026"], [82, "X"], [423, "-1,00"], [538, "10,00"]),
+    ]);
+    expect(tx.date).toBe("2026-05-04");
   });
 
-  it("converts DD/MM/YYYY → YYYY-MM-DD", () => {
-    const input = csv(
-      `04/05/2026," PAGO TARJETA VISA","-1.636.262,52","0,00","589434,83",`
-    );
-    expect(parseGaliciaCSV(input)[0].date).toBe("2026-05-04");
-  });
-
-  it("stores debit as absolute value", () => {
-    const input = csv(
-      `04/05/2026," PAGO TARJETA VISA","-1.636.262,52","0,00","589434,83",`
-    );
-    expect(parseGaliciaCSV(input)[0].debit).toBe(1636262.52);
-  });
-
-  it("preserves balance sign", () => {
-    const input = csv(`04/05/2026," X","-100,00","0,00","-50,00",`);
-    expect(parseGaliciaCSV(input)[0].balance).toBe(-50);
-  });
-
-  it("skips rows with invalid date silently", () => {
-    const input = csv(
-      `not-a-date," X","-1,00","0,00","100,00",`,
-      `20/05/2026," Y","-2,00","0,00","98,00",`
-    );
-    const txs = parseGaliciaCSV(input);
-    expect(txs).toHaveLength(1);
-    expect(txs[0].debit).toBe(2);
-  });
-
-  it("skips rows with unparseable amounts silently", () => {
-    const input = csv(
-      `20/05/2026," X","abc","0,00","100,00",`,
-      `20/05/2026," Y","-2,00","0,00","98,00",`
-    );
-    const txs = parseGaliciaCSV(input);
-    expect(txs).toHaveLength(1);
-  });
-
-  it("throws when header is missing", () => {
-    expect(() => parseGaliciaCSV("just,some,csv\n1,2,3")).toThrow(
-      /header no encontrado/
-    );
-  });
-
-  it("returns empty array when only header is present", () => {
-    expect(parseGaliciaCSV(csv())).toEqual([]);
+  it("ignora filas de header repetidas en cada página", () => {
+    const txs = parseGaliciaRows([
+      HEADER,
+      row([38, "03/02/26"], [82, "A"], [423, "-100,00"], [538, "900,00"]),
+      HEADER, // header repetido (otra página)
+      row([38, "04/02/26"], [82, "B"], [312, "50,00"], [538, "950,00"]),
+    ]);
+    expect(txs.map((t) => t.description)).toEqual(["A", "B"]);
   });
 });
 
 describe("toNormalized", () => {
   const base: GaliciaTransaction = {
-    date: "2026-05-20",
+    date: "2026-02-03",
     description: "X",
     debit: 0,
     credit: 0,
     balance: 100,
-    comments: "",
   };
 
-  it("emits a positive ARS NT for debit-only rows", () => {
-    const [nt, ...rest] = toNormalized([{ ...base, debit: 500 }]);
-    expect(rest).toEqual([]);
-    expect(nt.amount).toBe(500);
-    expect(nt.currency).toBe("ARS");
-    expect(nt.source).toBe("galicia-extracto");
+  it("débito → monto positivo (gasto), ARS, galicia-extracto", () => {
+    const [nt] = toNormalized([{ ...base, debit: 500 }]);
+    expect(nt).toMatchObject({
+      amount: 500,
+      currency: "ARS",
+      source: "galicia-extracto",
+    });
+    expect(nt.meta).toEqual({ balance: 100 });
   });
 
-  it("emits a negative ARS NT for credit-only rows", () => {
+  it("crédito → monto negativo (ingreso)", () => {
     const [nt] = toNormalized([{ ...base, credit: 800 }]);
     expect(nt.amount).toBe(-800);
-    expect(nt.currency).toBe("ARS");
   });
 
-  it("emits two NTs for a row with both debit and credit > 0", () => {
-    const nts = toNormalized([{ ...base, debit: 100, credit: 50 }]);
-    expect(nts).toHaveLength(2);
-    expect(nts.map((n) => n.amount).sort((a, b) => a - b)).toEqual([-50, 100]);
-  });
-
-  it("emits no NTs for a row with both in 0", () => {
+  it("no emite nada si débito y crédito son 0", () => {
     expect(toNormalized([base])).toEqual([]);
-  });
-
-  it("includes balance and comments in meta", () => {
-    const [nt] = toNormalized([
-      { ...base, debit: 10, balance: 999, comments: "hola" },
-    ]);
-    expect(nt.meta).toEqual({ balance: 999, comments: "hola" });
   });
 });
 
-describe("groupByWeek over GaliciaTransaction", () => {
-  it("sums debits per ISO week, ignoring credits in the total", () => {
-    const txs: GaliciaTransaction[] = [
-      {
-        date: "2026-05-11",
-        description: "A",
-        debit: 100,
-        credit: 0,
-        balance: 0,
-        comments: "",
-      },
-      {
-        date: "2026-05-12",
-        description: "B",
-        debit: 0,
-        credit: 500,
-        balance: 0,
-        comments: "",
-      },
-      {
-        date: "2026-05-18",
-        description: "C",
-        debit: 50,
-        credit: 0,
-        balance: 0,
-        comments: "",
-      },
-    ];
+describe("findGaliciaTotal", () => {
+  it("lee crédito/débito de la fila Total (3 montos: cred, déb, saldo)", () => {
+    const total = findGaliciaTotal([
+      row([57, "Total"], [292, "$ 2.035.471,30"], [402, "-$ 1.998.255,50"], [532, "$ 93.441,65"]),
+    ]);
+    expect(total).toEqual({ credit: 2035471.3, debit: 1998255.5 });
+  });
 
-    const weeks = groupByWeek(
-      txs,
-      (t) => new Date(t.date),
-      (t) => t.debit
-    );
+  it("devuelve null si no hay fila Total", () => {
+    expect(findGaliciaTotal([HEADER])).toBeNull();
+  });
+});
 
-    expect(weeks).toHaveLength(2);
-    expect(weeks[0].weekStart).toBe("2026-05-11");
-    expect(weeks[0].total).toBe(100);
-    expect(weeks[0].transactionCount).toBe(2);
-    expect(weeks[1].weekStart).toBe("2026-05-18");
-    expect(weeks[1].total).toBe(50);
-    expect(weeks[1].transactionCount).toBe(1);
+describe("galiciaTotals", () => {
+  it("suma créditos y débitos", () => {
+    const sum = galiciaTotals([
+      { date: "", description: "", debit: 100, credit: 0, balance: 0 },
+      { date: "", description: "", debit: 0, credit: 30, balance: 0 },
+    ]);
+    expect(sum).toEqual({ credit: 30, debit: 100 });
   });
 });

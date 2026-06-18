@@ -1,14 +1,10 @@
-import * as fs from "fs";
-import * as path from "path";
-import {
-  formatDate,
-  groupByWeek,
-  WeeklyGroup,
-  NormalizedTransaction,
-} from "../shared";
+import { NormalizedTransaction } from "../shared";
+import { tokenizeCSV, stripBOM } from "../csv";
 
 export { getWeekStart, getWeekEnd, formatDate, groupByWeek } from "../shared";
 export type { WeeklyGroup } from "../shared";
+
+import type { WeeklyGroup } from "../shared";
 
 export interface Transaction {
   originalCurrency: string;
@@ -30,30 +26,52 @@ export interface Transaction {
 
 export type WeeklyExpense = WeeklyGroup<Transaction>;
 
+// Mapea por nombre de columna (no por índice) para ser robusto al orden y a las
+// comas internas del blob JSON de `apiTransaction` (que tokenizeCSV respeta).
 export function parseCSV(csvContent: string): Transaction[] {
-  const lines = csvContent.trim().split("\n");
-  if (lines.length <= 1) return [];
+  const rows = tokenizeCSV(stripBOM(csvContent.trim()), ",");
+  if (rows.length <= 1) return [];
 
-  return lines.slice(1).map((line) => {
-    const values = line.split(",");
-    return {
-      originalCurrency: values[0] || "",
-      originalAmount: parseFloat(values[1]) || 0,
-      USDAmount: parseFloat(values[2]) || 0,
-      date: values[3] || "",
-      mcc: values[4] || "",
-      merchantName: values[7] || "",
-      merchantCountry: values[8] || "",
-      status: values[9] || "",
-      declineReason: values[10] || "",
-      authCode: values[11] || "",
-      type: values[12] || "",
-      externalTxId: values[13] || "",
-      externalRootTxId: values[14] || "",
-      apiTransaction: values[15] || "",
-      last4: values[16] || "",
-    };
-  });
+  const header = rows[0].map((h) => h.trim());
+  const col = (name: string) => header.indexOf(name);
+  const ci = {
+    originalCurrency: col("originalCurrency"),
+    originalAmount: col("originalAmount"),
+    USDAmount: col("USDAmount"),
+    date: col("date"),
+    mcc: col("mcc"),
+    merchantName: col("merchantName"),
+    merchantCountry: col("merchantCountry"),
+    status: col("status"),
+    declineReason: col("declineReason"),
+    authCode: col("authCode"),
+    type: col("type"),
+    externalTxId: col("externalTxId"),
+    externalRootTxId: col("externalRootTxId"),
+    apiTransaction: col("apiTransaction"),
+    last4: col("last4"),
+  };
+
+  const at = (values: string[], i: number) => (i >= 0 ? values[i] ?? "" : "");
+  const num = (values: string[], i: number) => parseFloat(at(values, i)) || 0;
+
+  return rows.slice(1).map((values) => ({
+    originalCurrency: at(values, ci.originalCurrency),
+    originalAmount: num(values, ci.originalAmount),
+    USDAmount: num(values, ci.USDAmount),
+    date: at(values, ci.date),
+    mcc: at(values, ci.mcc),
+    merchantName: at(values, ci.merchantName),
+    merchantCountry: at(values, ci.merchantCountry),
+    status: at(values, ci.status),
+    declineReason: at(values, ci.declineReason),
+    authCode: at(values, ci.authCode),
+    type: at(values, ci.type),
+    externalTxId: at(values, ci.externalTxId),
+    externalRootTxId: at(values, ci.externalRootTxId),
+    apiTransaction: at(values, ci.apiTransaction),
+    last4: at(values, ci.last4),
+  }));
 }
 
 export function toNormalized(rows: Transaction[]): NormalizedTransaction[] {
@@ -76,84 +94,4 @@ export function toNormalized(rows: Transaction[]): NormalizedTransaction[] {
       },
     };
   });
-}
-
-export function displayWeeklyExpenses(weeklyExpenses: WeeklyExpense[]): void {
-  console.log("\n📊 Weekly Expenses Summary (USD)\n");
-  console.log("=".repeat(80));
-
-  weeklyExpenses.forEach((week) => {
-    console.log(`\n📅 Week of ${week.weekStart} to ${week.weekEnd}`);
-    console.log(`💰 Total: $${week.total.toFixed(2)}`);
-    console.log(`📝 Transactions: ${week.transactionCount}`);
-
-    const topTransactions = week.transactions.sort(
-      (a, b) => b.USDAmount - a.USDAmount
-    );
-
-    if (topTransactions.length > 0) {
-      console.log("All transactions:");
-      topTransactions.forEach((tx, index) => {
-        console.log(
-          `   ${index + 1}. ${tx.merchantName} - $${tx.USDAmount.toFixed(2)} (${
-            tx.originalCurrency
-          } ${tx.originalAmount}) - ${formatDate(new Date(tx.date))}`
-        );
-      });
-    }
-
-    console.log("-".repeat(40));
-  });
-
-  const totalAmount = weeklyExpenses.reduce(
-    (sum, week) => sum + week.total,
-    0
-  );
-  const totalTransactions = weeklyExpenses.reduce(
-    (sum, week) => sum + week.transactionCount,
-    0
-  );
-  const averagePerWeek = totalAmount / weeklyExpenses.length;
-
-  console.log("\n📈 Summary Statistics:");
-  console.log(`💰 Total amount: $${totalAmount.toFixed(2)}`);
-  console.log(`📝 Total transactions: ${totalTransactions}`);
-  console.log(`📊 Average per week: $${averagePerWeek.toFixed(2)}`);
-  console.log(`📅 Number of weeks: ${weeklyExpenses.length}`);
-}
-
-export function main(): void {
-  try {
-    const csvPath = path.join(__dirname, "..", "data-deel", "card-transactions.csv");
-
-    if (!fs.existsSync(csvPath)) {
-      console.error(
-        "❌ Error: transactions.csv file not found in data directory"
-      );
-      return;
-    }
-
-    const csvContent = fs.readFileSync(csvPath, "utf-8");
-    const transactions = parseCSV(csvContent);
-
-    if (transactions.length === 0) {
-      console.log("📭 No transactions found in the CSV file");
-      return;
-    }
-
-    console.log(`📄 Loaded ${transactions.length} transactions from CSV`);
-
-    const weeklyExpenses = groupByWeek(
-      transactions,
-      (t) => new Date(t.date),
-      (t) => t.USDAmount
-    );
-    displayWeeklyExpenses(weeklyExpenses);
-  } catch (error) {
-    console.error("❌ Error processing transactions:", error);
-  }
-}
-
-if (require.main === module) {
-  main();
 }

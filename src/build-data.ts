@@ -6,74 +6,97 @@ import {
   toNormalized as deelToNormalized,
 } from "./deel/index";
 import {
-  parseGaliciaCSV,
+  loadGaliciaPdf,
   toNormalized as galiciaToNormalized,
 } from "./galicia/index";
 import {
-  parseCreditoCSV,
+  loadCreditoPdf,
   toNormalized as creditoToNormalized,
+  StatementSummary,
 } from "./credito/index";
+import { writeContadorReports } from "./contador/report";
 
 const ROOT = path.join(__dirname, "..");
-const OUT_PATH = path.join(ROOT, "web", "public", "data.json");
+const DATA_JSON = path.join(ROOT, "web", "public", "data.json");
+const REPORTS_DIR = path.join(ROOT, "reports");
 
-type Loader = () => NormalizedTransaction[];
-
-function loadCsvsFromDir<T>(
-  dir: string,
-  parse: (text: string) => T[]
-): T[] {
+function filesIn(dir: string, ext: string): string[] {
   if (!fs.existsSync(dir)) return [];
-  const files = fs
+  return fs
     .readdirSync(dir)
-    .filter((f) => f.toLowerCase().endsWith(".csv"))
-    .sort();
-  const out: T[] = [];
-  for (const file of files) {
-    const text = fs.readFileSync(path.join(dir, file), "utf-8");
-    out.push(...parse(text));
+    .filter((f) => f.toLowerCase().endsWith(ext))
+    .sort()
+    .map((f) => path.join(dir, f));
+}
+
+function loadDeel(): NormalizedTransaction[] {
+  const out: NormalizedTransaction[] = [];
+  for (const file of filesIn(path.join(ROOT, "src", "data-deel"), ".csv")) {
+    const text = fs.readFileSync(file, "utf-8");
+    out.push(...deelToNormalized(parseDeel(text)));
   }
   return out;
 }
 
-const sources: { name: string; load: Loader }[] = [
-  {
-    name: "deel",
-    load: () =>
-      deelToNormalized(
-        loadCsvsFromDir(path.join(ROOT, "src", "data-deel"), parseDeel)
-      ),
-  },
-  {
-    name: "galicia-extracto",
-    load: () =>
-      galiciaToNormalized(
-        loadCsvsFromDir(
-          path.join(ROOT, "src", "data-galicia"),
-          parseGaliciaCSV
-        )
-      ),
-  },
-  {
-    name: "galicia-credito",
-    load: () =>
-      creditoToNormalized(
-        loadCsvsFromDir(
-          path.join(ROOT, "src", "data-credito"),
-          parseCreditoCSV
-        )
-      ),
-  },
-];
+async function loadGalicia(): Promise<NormalizedTransaction[]> {
+  const out: NormalizedTransaction[] = [];
+  for (const file of filesIn(path.join(ROOT, "src", "data-galicia"), ".pdf")) {
+    const { transactions, warnings } = await loadGaliciaPdf(
+      fs.readFileSync(file)
+    );
+    for (const w of warnings) {
+      console.warn(`⚠️  ${path.basename(file)}: ${w}`);
+    }
+    out.push(...galiciaToNormalized(transactions));
+  }
+  return out;
+}
 
-function main(): void {
+async function loadCredito(): Promise<{
+  txs: NormalizedTransaction[];
+  statements: StatementSummary[];
+}> {
+  const txs: NormalizedTransaction[] = [];
+  const statements: StatementSummary[] = [];
+  for (const file of filesIn(path.join(ROOT, "src", "data-credito"), ".pdf")) {
+    const { transactions, statement, warnings } = await loadCreditoPdf(
+      fs.readFileSync(file),
+      path.basename(file)
+    );
+    for (const w of warnings) {
+      console.warn(`⚠️  ${path.basename(file)}: ${w}`);
+    }
+    txs.push(...creditoToNormalized(transactions));
+    statements.push(statement);
+  }
+  return { txs, statements };
+}
+
+async function main(): Promise<void> {
   const all: NormalizedTransaction[] = [];
+  let statements: StatementSummary[] = [];
   let failures = 0;
+
+  const sources: {
+    name: string;
+    run: () => Promise<NormalizedTransaction[]>;
+  }[] = [
+    { name: "deel", run: async () => loadDeel() },
+    { name: "galicia-extracto", run: loadGalicia },
+    {
+      name: "galicia-credito",
+      run: async () => {
+        const r = await loadCredito();
+        statements = r.statements;
+        return r.txs;
+      },
+    },
+  ];
 
   for (const src of sources) {
     try {
-      const items = src.load();
-      console.log(`📄 ${src.name}: ${items.length} transactions`);
+      const items = await src.run();
+      console.log(`📄 ${src.name}: ${items.length} transacciones`);
       all.push(...items);
     } catch (err) {
       failures += 1;
@@ -91,14 +114,21 @@ function main(): void {
 
   all.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
-  const outDir = path.dirname(OUT_PATH);
-  if (!fs.existsSync(outDir)) {
-    fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(path.dirname(DATA_JSON), { recursive: true });
+  fs.writeFileSync(DATA_JSON, JSON.stringify(all, null, 2), "utf-8");
+  console.log(
+    `📦 ${all.length} transacciones → ${path.relative(ROOT, DATA_JSON)}`
+  );
+
+  const reports = writeContadorReports(all, statements, REPORTS_DIR);
+  for (const file of reports) {
+    console.log(`🧾 reporte contador → ${path.relative(ROOT, file)}`);
   }
-  fs.writeFileSync(OUT_PATH, JSON.stringify(all, null, 2), "utf-8");
-  console.log(`📦 wrote ${all.length} transactions → ${path.relative(ROOT, OUT_PATH)}`);
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

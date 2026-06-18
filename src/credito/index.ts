@@ -1,83 +1,184 @@
-import * as fs from "fs";
-import * as path from "path";
-import {
-  WeeklyGroup,
-  groupByWeek,
-  NormalizedTransaction,
-} from "../shared";
-import { tokenizeCSV } from "../galicia/index";
-
-const DATA_DIR = path.join(__dirname, "..", "data-credito");
-const EXPECTED_HEADER = [
-  "Fecha",
-  "Tarjeta/Tipo",
-  "Descripcion",
-  "Monto ARS",
-  "Monto USD",
-];
+import { NormalizedTransaction } from "../shared";
+import { extractRows, TextRow, rowText } from "../pdf/extract";
+import { parseSpanishAmount } from "../csv";
 
 export interface CreditoTransaction {
   date: string;
-  card: string;
+  card: string; // "Visa 0234"
   description: string;
   amountARS: number;
   amountUSD: number;
+  cuota?: string;
+  period: string; // "YYYY-MM" — mes de cierre del resumen
 }
 
-function parseDDMMYYYY(raw: string): string | null {
-  const m = raw.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+export interface StatementSummary {
+  period: string;
+  totalARS: number; // TOTAL A PAGAR pesos
+  totalUSD: number; // TOTAL A PAGAR dólares
+}
+
+export interface CreditoParseResult {
+  transactions: CreditoTransaction[];
+  statement: StatementSummary;
+  warnings: string[];
+}
+
+// Columnas del DETALLE DEL CONSUMO:
+// FECHA(~23)  flag(~74)  REFERENCIA(~86)  CUOTA(~320)  COMPROBANTE(~365)  PESOS(~460)  DÓLARES(~553)
+const DESC_MIN_X = 80;
+const DESC_MAX_X = 355;
+const CUOTA_MIN_X = 300;
+const CUOTA_MAX_X = 355;
+const AMOUNT_MIN_X = 420; // por debajo: importe en moneda original / comprobante
+const USD_MIN_X = 510; // >= USD; entre AMOUNT_MIN_X y esto: ARS
+
+function parseCreditoDate(raw: string): string | null {
+  const m = raw.trim().match(/^(\d{2})-(\d{2})-(\d{2})$/);
   if (!m) return null;
-  const [, dd, mm, yyyy] = m;
-  return `${yyyy}-${mm}-${dd}`;
+  const [, dd, mm, yy] = m;
+  return `20${yy}-${mm}-${dd}`;
 }
 
-function parseDecimal(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const n = parseFloat(trimmed);
-  return Number.isFinite(n) ? n : null;
+// "RESUMEN_VISA26_2_2026pdf.pdf" → "2026-02" (día_mes_año de cierre).
+export function deriveCreditoPeriod(filename: string): string | null {
+  const m = filename.match(/VISA(\d{1,2})_(\d{1,2})_(\d{4})/i);
+  if (!m) return null;
+  const [, , mm, yyyy] = m;
+  return `${yyyy}-${mm.padStart(2, "0")}`;
 }
 
-function isHeader(row: string[]): boolean {
-  if (row.length < EXPECTED_HEADER.length) return false;
-  return EXPECTED_HEADER.every((h, idx) => row[idx]?.trim() === h);
+interface Amount {
+  x: number;
+  value: number;
 }
 
-function stripBOM(text: string): string {
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-}
-
-export function parseCreditoCSV(text: string): CreditoTransaction[] {
-  const rows = tokenizeCSV(stripBOM(text));
-  const headerIdx = rows.findIndex(isHeader);
-  if (headerIdx === -1) {
-    throw new Error(
-      "header no encontrado, ¿es un resumen de tarjeta crédito Galicia? (esperaba 'Fecha,Tarjeta/Tipo,Descripcion,Monto ARS,Monto USD')"
-    );
+function amountTokens(row: TextRow): Amount[] {
+  const out: Amount[] = [];
+  for (const tok of row.tokens) {
+    if (tok.x < AMOUNT_MIN_X) continue;
+    const v = parseSpanishAmount(tok.str);
+    if (v !== null) out.push({ x: tok.x, value: v });
   }
+  return out;
+}
 
-  const out: CreditoTransaction[] = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row.length < EXPECTED_HEADER.length) continue;
+function splitAmounts(row: TextRow): { ars: number; usd: number } {
+  let ars = 0;
+  let usd = 0;
+  for (const a of amountTokens(row)) {
+    if (a.x >= USD_MIN_X) usd += a.value;
+    else ars += a.value;
+  }
+  return { ars, usd };
+}
 
-    const date = parseDDMMYYYY(row[0] ?? "");
+function descriptionAndCuota(row: TextRow): {
+  description: string;
+  cuota?: string;
+} {
+  const descToks: string[] = [];
+  const cuotaToks: string[] = [];
+  for (const tok of row.tokens) {
+    if (tok.x >= CUOTA_MIN_X && tok.x <= CUOTA_MAX_X) {
+      cuotaToks.push(tok.str.trim());
+    } else if (tok.x >= DESC_MIN_X && tok.x < DESC_MAX_X) {
+      descToks.push(tok.str.trim());
+    }
+  }
+  let description = descToks.join(" ").trim();
+  // Quita el sufijo "<MON> <importe>" de compras en el exterior (queda el comercio).
+  description = description.replace(/\s+[A-Z]{3}\s+[\d.,]+$/, "").trim();
+  const cuota = cuotaToks.join(" ").trim();
+  return cuota ? { description, cuota } : { description };
+}
+
+const TARJETA_TOTAL_RE = /TARJETA\s+(\d{3,4})\s+Total\s+Consumos/i;
+
+export function parseCreditoRows(
+  rows: TextRow[],
+  period: string
+): CreditoParseResult {
+  const transactions: CreditoTransaction[] = [];
+  const warnings: string[] = [];
+  let buffer: CreditoTransaction[] = []; // consumos sin tarjeta asignada todavía
+  let inDetalle = false;
+  let totalARS = 0;
+  let totalUSD = 0;
+
+  for (const row of rows) {
+    const text = rowText(row);
+
+    if (/DETALLE DEL CONSUMO/i.test(text)) {
+      inDetalle = true;
+      continue;
+    }
+
+    // Subtotal por tarjeta: cierra el grupo de consumos previos.
+    const mTar = text.match(TARJETA_TOTAL_RE);
+    if (mTar) {
+      const card = `Visa ${mTar[1]}`;
+      const sum = buffer.reduce(
+        (acc, t) => ({
+          ars: acc.ars + t.amountARS,
+          usd: acc.usd + t.amountUSD,
+        }),
+        { ars: 0, usd: 0 }
+      );
+      const declared = splitAmounts(row);
+      if (Math.abs(sum.ars - declared.ars) > 0.5) {
+        warnings.push(
+          `${card}: consumos ARS ${sum.ars.toFixed(2)} ≠ subtotal PDF ${declared.ars.toFixed(2)}`
+        );
+      }
+      if (Math.abs(sum.usd - declared.usd) > 0.5) {
+        warnings.push(
+          `${card}: consumos USD ${sum.usd.toFixed(2)} ≠ subtotal PDF ${declared.usd.toFixed(2)}`
+        );
+      }
+      for (const tx of buffer) tx.card = card;
+      transactions.push(...buffer);
+      buffer = [];
+      continue;
+    }
+
+    if (/TOTAL A PAGAR/i.test(text)) {
+      const { ars, usd } = splitAmounts(row);
+      totalARS = ars;
+      totalUSD = usd;
+      break; // fin de los consumos
+    }
+
+    if (!inDetalle) continue;
+
+    const first = row.tokens[0];
+    if (!first || first.x >= 60) continue;
+    const date = parseCreditoDate(first.str);
     if (!date) continue;
 
-    const amountARS = parseDecimal(row[3] ?? "");
-    const amountUSD = parseDecimal(row[4] ?? "");
-    if (amountARS === null || amountUSD === null) continue;
+    const { ars, usd } = splitAmounts(row);
+    if (ars === 0 && usd === 0) continue;
+    const { description, cuota } = descriptionAndCuota(row);
 
-    out.push({
+    buffer.push({
       date,
-      card: (row[1] ?? "").trim(),
-      description: (row[2] ?? "").trim(),
-      amountARS,
-      amountUSD,
+      card: "", // se asigna al toparse con el subtotal de la tarjeta
+      description,
+      amountARS: ars,
+      amountUSD: usd,
+      cuota,
+      period,
     });
   }
 
-  return out;
+  // El buffer remanente (percepciones/impuestos posteriores al último subtotal,
+  // sin línea "Total Consumos") no son consumos → se descarta.
+
+  return {
+    transactions,
+    statement: { period, totalARS, totalUSD },
+    warnings,
+  };
 }
 
 export function toNormalized(
@@ -85,8 +186,8 @@ export function toNormalized(
 ): NormalizedTransaction[] {
   const out: NormalizedTransaction[] = [];
   for (const row of rows) {
-    if (row.card === "-") continue;
-    const meta = { card: row.card };
+    const meta: Record<string, unknown> = { card: row.card, period: row.period };
+    if (row.cuota) meta.cuota = row.cuota;
     if (row.amountARS !== 0) {
       out.push({
         date: row.date,
@@ -111,115 +212,36 @@ export function toNormalized(
   return out;
 }
 
-const arsFormatter = new Intl.NumberFormat("es-AR", {
-  style: "currency",
-  currency: "ARS",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-const usdFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-function formatCurrency(currency: string, n: number): string {
-  return currency === "ARS" ? arsFormatter.format(n) : usdFormatter.format(n);
-}
-
-function displayPass(
-  currency: string,
-  nts: NormalizedTransaction[]
-): void {
-  console.log(`\n📊 Weekly Summary (${currency}) — Tarjeta Crédito Galicia\n`);
-  console.log("=".repeat(80));
-
-  if (nts.length === 0) {
-    console.log(`📭 sin movimientos en ${currency}`);
-    return;
-  }
-
-  const weeks = groupByWeek(
-    nts,
-    (t) => new Date(t.date),
-    (t) => t.amount
+// Suma de consumos por moneda, para validar contra los subtotales del PDF.
+export function creditoTotals(rows: CreditoTransaction[]): {
+  ars: number;
+  usd: number;
+} {
+  return rows.reduce(
+    (acc, r) => ({ ars: acc.ars + r.amountARS, usd: acc.usd + r.amountUSD }),
+    { ars: 0, usd: 0 }
   );
-
-  weeks.forEach((week) => {
-    console.log(`\n📅 Week of ${week.weekStart} to ${week.weekEnd}`);
-    console.log(`💰 Total: ${formatCurrency(currency, week.total)}`);
-    console.log(`📝 Transactions: ${week.transactionCount}`);
-
-    const sorted = [...week.transactions].sort((a, b) => b.amount - a.amount);
-    if (sorted.length > 0) {
-      console.log("All transactions:");
-      sorted.forEach((tx, index) => {
-        const card =
-          tx.meta && typeof tx.meta.card === "string" ? tx.meta.card : "-";
-        console.log(
-          `   ${index + 1}. ${card} — ${tx.description} — ${formatCurrency(
-            currency,
-            tx.amount
-          )} — ${tx.date}`
-        );
-      });
-    }
-    console.log("-".repeat(40));
-  });
-
-  const totalAmount = weeks.reduce((sum, w) => sum + w.total, 0);
-  const totalCount = weeks.reduce((sum, w) => sum + w.transactionCount, 0);
-  const avg = weeks.length > 0 ? totalAmount / weeks.length : 0;
-
-  console.log(`\n📈 Summary Statistics (${currency}):`);
-  console.log(`💰 Total amount: ${formatCurrency(currency, totalAmount)}`);
-  console.log(`📝 Total transactions: ${totalCount}`);
-  console.log(`📊 Average per week: ${formatCurrency(currency, avg)}`);
-  console.log(`📅 Number of weeks: ${weeks.length}`);
 }
 
-export function displayCreditoWeekly(nts: NormalizedTransaction[]): void {
-  displayPass("ARS", nts.filter((n) => n.currency === "ARS"));
-  displayPass("USD", nts.filter((n) => n.currency === "USD"));
+export async function loadCreditoPdf(
+  data: Buffer,
+  filename: string
+): Promise<CreditoParseResult> {
+  const rows = await extractRows(data);
+  const period =
+    deriveCreditoPeriod(filename) ?? fallbackPeriod(rows) ?? "0000-00";
+  return parseCreditoRows(rows, period);
 }
 
-export function main(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    console.error(`❌ directorio no encontrado: ${DATA_DIR}`);
-    process.exit(1);
+// Fallback: mes máximo entre las fechas de consumo si el nombre de archivo no
+// trae el período.
+function fallbackPeriod(rows: TextRow[]): string | null {
+  let max: string | null = null;
+  for (const row of rows) {
+    const first = row.tokens[0];
+    if (!first || first.x >= 60) continue;
+    const d = parseCreditoDate(first.str);
+    if (d && (!max || d > max)) max = d;
   }
-
-  const csvFiles = fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => f.toLowerCase().endsWith(".csv"))
-    .sort();
-
-  if (csvFiles.length === 0) {
-    console.error("❌ no hay csv en src/data-credito/");
-    process.exit(1);
-  }
-
-  const all: CreditoTransaction[] = [];
-  csvFiles.forEach((file) => {
-    const content = fs.readFileSync(path.join(DATA_DIR, file), "utf-8");
-    all.push(...parseCreditoCSV(content));
-  });
-
-  if (all.length === 0) {
-    console.log("📭 el resumen está vacío");
-    return;
-  }
-
-  const nts = toNormalized(all);
-  console.log(
-    `📄 Loaded ${all.length} rows from CSV (${nts.length} normalized transactions after filtering pagos)`
-  );
-
-  displayCreditoWeekly(nts);
-}
-
-if (require.main === module) {
-  main();
+  return max ? max.slice(0, 7) : null;
 }

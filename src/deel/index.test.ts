@@ -13,12 +13,12 @@ import {
 } from "./index";
 
 // Test data
-const sampleCSV = `originalCurrency;originalAmount;USDAmount;date;mcc;merchantName;merchantCountry;status;declineReason;authCode;type;externalTxId;externalRootTxId;apiTransaction;last4
-EUR;6.7500;7.9700;2025-08-11T11:31:28.217Z;5411;MERCADONA RAMBLA DEL POBL;ES;PENDING;;9GYXE4;POS_TX;65dcfa2c-b2cd-4694-9d01-c8dc72ccca5d;65dcfa2c-b2cd-4694-9d01-c8dc72ccca5d;test;6530
-EUR;42.6000;50.3500;2025-08-11T09:47:51.658Z;4111;METRO BARCELONA;ES;PENDING;;WCC1HN;POS_TX;8f85fb50-0fa1-4797-911e-d1522ce63013;8f85fb50-0fa1-4797-911e-d1522ce63013;test;6530
-CHF;30.0000;37.0100;2025-08-10T00:38:27.341Z;7011;Geneva Hostel;CH;APPROVED;;694086;REFUND;f96f7cfd-3106-4ceb-9ccc-2054718f6662;f96f7cfd-3106-4ceb-9ccc-2054718f6662;test;6530
-EUR;23.6600;28.0400;2025-08-09T19:37:01.625Z;5411;EXPRESS MARINA 2;ES;APPROVED;;SWFYNI;POS_TX;42cd389d-df92-4370-a9e0-a8f6392ead47;42cd389d-df92-4370-a9e0-a8f6392ead47;test;6530
-USD;14.0900;14.0900;2025-08-08T01:51:03.444Z;4816;Hetzner Online;DE;APPROVED;;EVLST0;POS_TX;b094724b-e2bd-447d-8e34-3931f27bfdce;b094724b-e2bd-447d-8e34-3931f27bfdce;test;6530`;
+const sampleCSV = `originalCurrency,originalAmount,USDAmount,date,mcc,merchantName,merchantCountry,status,declineReason,authCode,type,externalTxId,externalRootTxId,apiTransaction,last4
+EUR,6.7500,7.9700,2025-08-11T11:31:28.217Z,5411,MERCADONA RAMBLA DEL POBL,ES,PENDING,,9GYXE4,POS_TX,65dcfa2c-b2cd-4694-9d01-c8dc72ccca5d,65dcfa2c-b2cd-4694-9d01-c8dc72ccca5d,test,6530
+EUR,42.6000,50.3500,2025-08-11T09:47:51.658Z,4111,METRO BARCELONA,ES,PENDING,,WCC1HN,POS_TX,8f85fb50-0fa1-4797-911e-d1522ce63013,8f85fb50-0fa1-4797-911e-d1522ce63013,test,6530
+CHF,30.0000,37.0100,2025-08-10T00:38:27.341Z,7011,Geneva Hostel,CH,APPROVED,,694086,REFUND,f96f7cfd-3106-4ceb-9ccc-2054718f6662,f96f7cfd-3106-4ceb-9ccc-2054718f6662,test,6530
+EUR,23.6600,28.0400,2025-08-09T19:37:01.625Z,5411,EXPRESS MARINA 2,ES,APPROVED,,SWFYNI,POS_TX,42cd389d-df92-4370-a9e0-a8f6392ead47,42cd389d-df92-4370-a9e0-a8f6392ead47,test,6530
+USD,14.0900,14.0900,2025-08-08T01:51:03.444Z,4816,Hetzner Online,DE,APPROVED,,EVLST0,POS_TX,b094724b-e2bd-447d-8e34-3931f27bfdce,b094724b-e2bd-447d-8e34-3931f27bfdce,test,6530`;
 
 const sampleTransactions: Transaction[] = [
   {
@@ -89,7 +89,7 @@ describe("Weekly Expenses Script", () => {
 
     it("should handle CSV with only headers", () => {
       const csvWithOnlyHeaders =
-        "originalCurrency;originalAmount;USDAmount;date;mcc;merchantName;merchantCountry;status;declineReason;authCode;type;externalTxId;externalRootTxId;apiTransaction;last4";
+        "originalCurrency,originalAmount,USDAmount,date,mcc,merchantName,merchantCountry,status,declineReason,authCode,type,externalTxId,externalRootTxId,apiTransaction,last4";
       const transactions = parseCSV(csvWithOnlyHeaders);
       expect(transactions).toHaveLength(0);
     });

@@ -47,7 +47,7 @@ export function App(): JSX.Element {
         <h2>❌ error al cargar data.json</h2>
         <p className="muted">{error}</p>
         <p className="muted">
-          ¿corriste <code>npm run build:data</code>?
+          ¿corriste <code>npm run build</code>?
         </p>
       </div>
     );
@@ -66,7 +66,7 @@ export function App(): JSX.Element {
       <div style={{ padding: 40 }}>
         <h2>📭 sin transacciones</h2>
         <p className="muted">
-          corré <code>npm run build:data</code> después de poner CSVs en
+          corré <code>npm run build</code> después de poner los PDFs/CSV en
           src/data-*/
         </p>
       </div>

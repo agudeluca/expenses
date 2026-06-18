@@ -2,13 +2,8 @@
   "name": "your-project-name",
   "version": "1.0.0",
   "scripts": {
-    "deel": "npx ts-node src/deel/index.ts",
-    "galicia:convert": "npx ts-node src/galicia/xlsxToCsv.ts",
-    "galicia": "npx ts-node src/galicia/index.ts",
-    "galicia:all": "npm run galicia:convert && npm run galicia",
-    "credito": "npx ts-node src/credito/index.ts",
-    "build:data": "npx ts-node src/build-data.ts",
-    "web": "npm run build:data && vite",
+    "build": "npx ts-node src/build-data.ts",
+    "web": "npm run build && vite",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"
@@ -29,6 +24,7 @@
     "dayjs": "^1.11.11",
     "dotenv": "^16.4.5",
     "node-binance-api": "^0.13.1",
+    "pdfjs-dist": "^3.11.174",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "xlsx": "^0.18.5"

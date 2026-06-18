@@ -5,3 +5,5 @@ src/data-deel/*
 src/data-credito/*
 .superpowers/
 web/public/data.json
+web/dist/
+reports/

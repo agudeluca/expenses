@@ -1,152 +1,142 @@
-import * as fs from "fs";
-import * as path from "path";
-import { WeeklyGroup, groupByWeek, NormalizedTransaction } from "../shared";
-
-const DATA_DIR = path.join(__dirname, "..", "data-galicia");
-const EXPECTED_HEADER = [
-  "Fecha",
-  "Movimiento",
-  "Débito",
-  "Crédito",
-  "Saldo Parcial",
-  "Comentarios",
-];
+import { NormalizedTransaction } from "../shared";
+import { extractRows, TextRow, rowText } from "../pdf/extract";
+import { parseSpanishAmount } from "../csv";
 
 export interface GaliciaTransaction {
   date: string;
   description: string;
-  debit: number;
-  credit: number;
-  balance: number;
-  comments: string;
+  debit: number; // gasto, valor absoluto
+  credit: number; // ingreso
+  balance: number; // saldo parcial
 }
 
-export function tokenizeCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let field = "";
-  let row: string[] = [];
-  let inQuotes = false;
-  let i = 0;
+// Columna de montos: Crédito ~308, Débito ~423, Saldo ~540. La descripción está
+// en ~82 (e ítems de detalle, CBU, nombres) — por debajo de este umbral no se
+// considera "monto" para no confundir un CBU con un número.
+const AMOUNT_MIN_X = 270;
+// La descripción (y sus líneas de detalle) arrancan en x≈82.
+const DESC_MIN_X = 74;
+const DESC_MAX_X = 100;
 
-  while (i < text.length) {
-    const ch = text[i];
-
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i += 2;
-          continue;
-        }
-        inQuotes = false;
-        i += 1;
-        continue;
-      }
-      field += ch;
-      i += 1;
-      continue;
-    }
-
-    if (ch === '"') {
-      inQuotes = true;
-      i += 1;
-      continue;
-    }
-
-    if (ch === ",") {
-      row.push(field);
-      field = "";
-      i += 1;
-      continue;
-    }
-
-    if (ch === "\n" || ch === "\r") {
-      row.push(field);
-      field = "";
-      rows.push(row);
-      row = [];
-      if (ch === "\r" && text[i + 1] === "\n") {
-        i += 2;
-      } else {
-        i += 1;
-      }
-      continue;
-    }
-
-    field += ch;
-    i += 1;
-  }
-
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  return rows;
-}
-
-function parseSpanishAmount(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const normalized = trimmed.replace(/\./g, "").replace(",", ".");
-  const n = parseFloat(normalized);
-  return Number.isFinite(n) ? n : null;
-}
-
-function parseSpanishDate(raw: string): string | null {
-  const m = raw.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+function parseGaliciaDate(raw: string): string | null {
+  const m = raw.trim().match(/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/);
   if (!m) return null;
-  const [, dd, mm, yyyy] = m;
+  const [, dd, mm, yy] = m;
+  const yyyy = yy.length === 2 ? `20${yy}` : yy;
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function normalizeDescription(raw: string): string {
-  return raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0)
-    .join(" | ");
+function isHeaderRow(row: TextRow): boolean {
+  const t = rowText(row);
+  return /Fecha/.test(t) && /Descripci/.test(t) && /Saldo/.test(t);
 }
 
-function isHeader(row: string[]): boolean {
-  if (row.length < EXPECTED_HEADER.length) return false;
-  return EXPECTED_HEADER.every(
-    (h, idx) => row[idx]?.trim() === h
+function isNoiseRow(row: TextRow): boolean {
+  const t = rowText(row);
+  return (
+    /Página/.test(t) ||
+    /Resumen de Caja/.test(t) ||
+    /^\d{15,}[A-Z]?$/.test(t.replace(/\s/g, ""))
   );
 }
 
-export function parseGaliciaCSV(text: string): GaliciaTransaction[] {
-  const rows = tokenizeCSV(text);
-  const headerIdx = rows.findIndex(isHeader);
-  if (headerIdx === -1) {
-    throw new Error(
-      "header no encontrado, ¿es un extracto de Galicia? (esperaba 'Fecha,Movimiento,Débito,Crédito,Saldo Parcial,Comentarios')"
-    );
-  }
+function isTotalRow(row: TextRow): boolean {
+  const first = row.tokens[0];
+  return !!first && first.x < 70 && /^Total$/i.test(first.str.trim());
+}
 
+interface Amount {
+  x: number;
+  value: number;
+}
+
+function amountTokens(row: TextRow): Amount[] {
+  const out: Amount[] = [];
+  for (const tok of row.tokens) {
+    if (tok.x < AMOUNT_MIN_X) continue;
+    const v = parseSpanishAmount(tok.str);
+    if (v !== null) out.push({ x: tok.x, value: v });
+  }
+  return out;
+}
+
+// De los montos de una fila: el más a la derecha es el saldo; el otro es el
+// movimiento (negativo = débito, positivo = crédito).
+function classifyAmounts(amounts: Amount[]): {
+  credit: number;
+  debit: number;
+  balance: number;
+} {
+  const sorted = [...amounts].sort((a, b) => a.x - b.x);
+  const balance = sorted.length > 0 ? sorted[sorted.length - 1].value : 0;
+  const movement = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
+  let debit = 0;
+  let credit = 0;
+  if (movement) {
+    if (movement.value < 0) debit = Math.abs(movement.value);
+    else credit = movement.value;
+  }
+  return { credit, debit, balance };
+}
+
+// Texto de la descripción: tokens entre la columna de descripción (~82) y la de
+// montos (~270). Excluye la fecha (~38) y los montos.
+function descriptionText(row: TextRow): string {
+  return row.tokens
+    .filter((t) => t.x >= DESC_MIN_X && t.x < AMOUNT_MIN_X)
+    .map((t) => t.str.trim())
+    .filter((s) => s.length > 0)
+    .join(" ")
+    .trim();
+}
+
+// ¿La fila es una línea de detalle (continuación de la descripción)? Tiene su
+// primer token en la columna de descripción y no arranca con fecha.
+function isContinuationRow(row: TextRow): boolean {
+  const first = row.tokens[0];
+  if (!first) return false;
+  return first.x >= DESC_MIN_X && first.x <= DESC_MAX_X;
+}
+
+export function parseGaliciaRows(rows: TextRow[]): GaliciaTransaction[] {
   const out: GaliciaTransaction[] = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row.length < 5) continue;
+  let current: GaliciaTransaction | null = null;
 
-    const date = parseSpanishDate(row[0] ?? "");
-    if (!date) continue;
+  const push = () => {
+    if (current) out.push(current);
+    current = null;
+  };
 
-    const debitRaw = parseSpanishAmount(row[2] ?? "");
-    const creditRaw = parseSpanishAmount(row[3] ?? "");
-    const balance = parseSpanishAmount(row[4] ?? "");
-    if (debitRaw === null || creditRaw === null || balance === null) continue;
+  for (const row of rows) {
+    if (isHeaderRow(row) || isNoiseRow(row)) continue;
+    if (isTotalRow(row)) {
+      push();
+      break; // los movimientos terminan en la fila Total
+    }
 
-    out.push({
-      date,
-      description: normalizeDescription(row[1] ?? ""),
-      debit: Math.abs(debitRaw),
-      credit: creditRaw,
-      balance,
-      comments: (row[5] ?? "").trim(),
-    });
+    const first = row.tokens[0];
+    if (!first) continue;
+
+    const date = first.x < 70 ? parseGaliciaDate(first.str) : null;
+    if (date) {
+      push();
+      const { credit, debit, balance } = classifyAmounts(amountTokens(row));
+      current = {
+        date,
+        description: descriptionText(row),
+        debit,
+        credit,
+        balance,
+      };
+      continue;
+    }
+
+    if (current && isContinuationRow(row)) {
+      const extra = descriptionText(row);
+      if (extra) current.description += ` | ${extra}`;
+    }
   }
-
+  push();
   return out;
 }
 
@@ -155,7 +145,7 @@ export function toNormalized(
 ): NormalizedTransaction[] {
   const out: NormalizedTransaction[] = [];
   for (const row of rows) {
-    const meta = { balance: row.balance, comments: row.comments };
+    const meta = { balance: row.balance };
     if (row.debit > 0) {
       out.push({
         date: row.date,
@@ -180,116 +170,67 @@ export function toNormalized(
   return out;
 }
 
-const arsFormatter = new Intl.NumberFormat("es-AR", {
-  style: "currency",
-  currency: "ARS",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-function formatARS(n: number): string {
-  return arsFormatter.format(n);
-}
-
-function firstLine(description: string): string {
-  const idx = description.indexOf(" | ");
-  return idx === -1 ? description : description.slice(0, idx);
-}
-
-export function displayGaliciaWeekly(
-  weeks: WeeklyGroup<GaliciaTransaction>[]
-): void {
-  console.log("\n📊 Weekly Expenses Summary (ARS) — Banco Galicia\n");
-  console.log("=".repeat(80));
-
-  weeks.forEach((week) => {
-    console.log(`\n📅 Week of ${week.weekStart} to ${week.weekEnd}`);
-    console.log(`💰 Total: ${formatARS(week.total)}`);
-    console.log(`📝 Transactions: ${week.transactionCount}`);
-
-    const sorted = week.transactions.sort((a, b) => b.debit - a.debit);
-    if (sorted.length > 0) {
-      console.log("All transactions:");
-      sorted.forEach((tx, index) => {
-        console.log(
-          `   ${index + 1}. ${tx.description} - ${formatARS(
-            tx.debit
-          )} (ARS ${tx.debit.toFixed(2)}) - ${tx.date}`
-        );
-      });
-    }
-    console.log("-".repeat(40));
-  });
-
-  const totalAmount = weeks.reduce((sum, week) => sum + week.total, 0);
-  const totalTransactions = weeks.reduce(
-    (sum, week) => sum + week.transactionCount,
-    0
+// Suma de créditos/débitos para validar contra la fila "Total" del PDF.
+export function galiciaTotals(rows: GaliciaTransaction[]): {
+  credit: number;
+  debit: number;
+} {
+  return rows.reduce(
+    (acc, r) => ({
+      credit: acc.credit + r.credit,
+      debit: acc.debit + r.debit,
+    }),
+    { credit: 0, debit: 0 }
   );
-  const averagePerWeek = weeks.length > 0 ? totalAmount / weeks.length : 0;
+}
 
-  console.log("\n📈 Summary Statistics:");
-  console.log(`💰 Total amount: ${formatARS(totalAmount)}`);
-  console.log(`📝 Total transactions: ${totalTransactions}`);
-  console.log(`📊 Average per week: ${formatARS(averagePerWeek)}`);
-  console.log(`📅 Number of weeks: ${weeks.length}`);
+// Lee la fila "Total" del extracto (crédito/débito declarados por el banco).
+// La fila Total trae 3 montos: crédito (+), débito (-) y saldo (el más a la
+// derecha), así que no usamos la lógica de movimiento de 1 monto.
+export function findGaliciaTotal(
+  rows: TextRow[]
+): { credit: number; debit: number } | null {
+  for (const row of rows) {
+    if (!isTotalRow(row)) continue;
+    const amounts = amountTokens(row).sort((a, b) => a.x - b.x);
+    const movements = amounts.slice(0, -1); // descarta el saldo (rightmost)
+    let credit = 0;
+    let debit = 0;
+    for (const a of movements) {
+      if (a.value < 0) debit += Math.abs(a.value);
+      else credit += a.value;
+    }
+    return { credit, debit };
+  }
+  return null;
+}
 
-  const allDebits = weeks
-    .flatMap((w) => w.transactions)
-    .sort((a, b) => b.debit - a.debit);
-  const topN = Math.min(10, allDebits.length);
-  if (topN > 0) {
-    console.log(`\n🏆 Top ${topN} transactions of the period:`);
-    for (let i = 0; i < topN; i++) {
-      const tx = allDebits[i];
-      console.log(
-        `   ${i + 1}. ${formatARS(tx.debit)} - ${tx.date} - ${tx.description}`
+export interface GaliciaParseResult {
+  transactions: GaliciaTransaction[];
+  warnings: string[];
+}
+
+export async function loadGaliciaPdf(
+  data: Buffer
+): Promise<GaliciaParseResult> {
+  const rows = await extractRows(data);
+  const transactions = parseGaliciaRows(rows);
+  const warnings: string[] = [];
+
+  const declared = findGaliciaTotal(rows);
+  if (declared) {
+    const sum = galiciaTotals(transactions);
+    if (Math.abs(sum.credit - declared.credit) > 1) {
+      warnings.push(
+        `crédito parseado ${sum.credit.toFixed(2)} ≠ Total PDF ${declared.credit.toFixed(2)}`
+      );
+    }
+    if (Math.abs(sum.debit - declared.debit) > 1) {
+      warnings.push(
+        `débito parseado ${sum.debit.toFixed(2)} ≠ Total PDF ${declared.debit.toFixed(2)}`
       );
     }
   }
-}
 
-export function main(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    console.error(`❌ directorio no encontrado: ${DATA_DIR}`);
-    process.exit(1);
-  }
-
-  const csvFiles = fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => f.toLowerCase().endsWith(".csv"))
-    .sort();
-
-  if (csvFiles.length === 0) {
-    console.error(
-      "❌ no hay csv en src/data-galicia/. ¿Corriste 'npm run galicia:convert'?"
-    );
-    process.exit(1);
-  }
-
-  const all: GaliciaTransaction[] = [];
-  csvFiles.forEach((file) => {
-    const content = fs.readFileSync(path.join(DATA_DIR, file), "utf-8");
-    all.push(...parseGaliciaCSV(content));
-  });
-
-  if (all.length === 0) {
-    console.log("📭 el extracto está vacío");
-    return;
-  }
-
-  const debits = all.filter((t) => t.debit > 0);
-
-  console.log(`📄 Loaded ${debits.length} transactions from CSV`);
-
-  const weeks = groupByWeek(
-    debits,
-    (t) => new Date(t.date),
-    (t) => t.debit
-  );
-  displayGaliciaWeekly(weeks);
-}
-
-if (require.main === module) {
-  main();
+  return { transactions, warnings };
 }
