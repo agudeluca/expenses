@@ -223,6 +223,20 @@ export function creditoTotals(rows: CreditoTransaction[]): {
   );
 }
 
+// Subtotales declarados por el PDF en cada línea "TARJETA xxxx Total Consumos".
+export function findCreditoCardTotals(
+  rows: TextRow[]
+): { card: string; ars: number; usd: number }[] {
+  const out: { card: string; ars: number; usd: number }[] = [];
+  for (const row of rows) {
+    const m = rowText(row).match(TARJETA_TOTAL_RE);
+    if (!m) continue;
+    const { ars, usd } = splitAmounts(row);
+    out.push({ card: `Visa ${m[1]}`, ars, usd });
+  }
+  return out;
+}
+
 export async function loadCreditoPdf(
   data: Buffer,
   filename: string

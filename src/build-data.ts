@@ -17,8 +17,11 @@ import {
 import { writeContadorReports } from "./contador/report";
 
 const ROOT = path.join(__dirname, "..");
-const DATA_JSON = path.join(ROOT, "web", "public", "data.json");
-const REPORTS_DIR = path.join(ROOT, "reports");
+const PUBLIC_DIR = path.join(ROOT, "web", "public");
+const DATA_JSON = path.join(PUBLIC_DIR, "data.json");
+// El reporte del contador se escribe en web/public para que la dashboard lo
+// pueda ofrecer como descarga (y queda como archivo .xlsx para mandar al contador).
+const REPORTS_DIR = PUBLIC_DIR;
 
 function filesIn(dir: string, ext: string): string[] {
   if (!fs.existsSync(dir)) return [];

@@ -9,6 +9,7 @@ import { TopBar } from "./components/TopBar";
 import { WeekTable } from "./components/WeekTable";
 import { Tabs, type Tab } from "./components/Tabs";
 import { AnalyticsView } from "./components/AnalyticsView";
+import { ContadorDownload } from "./components/ContadorDownload";
 
 export function App(): JSX.Element {
   const [data, setData] = useState<NormalizedTransaction[] | null>(null);
@@ -93,7 +94,11 @@ export function App(): JSX.Element {
         setShowDismissed={d.setShowDismissed}
         clearDismissed={d.clearAll}
       />
-      <Tabs active={tab} setActive={setTab} />
+      <Tabs
+        active={tab}
+        setActive={setTab}
+        right={<ContadorDownload items={items} />}
+      />
       {tab === "transactions" ? (
         <WeekTable
           weeks={weeks}
