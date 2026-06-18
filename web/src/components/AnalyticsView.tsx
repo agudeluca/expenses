@@ -9,6 +9,14 @@ interface Props {
   toggleDismiss: (t: NormalizedTransaction) => void;
 }
 
+interface WeekBreakdown {
+  weekStart: string;
+  weekEnd: string;
+  total: number;
+  count: number;
+  top: NormalizedTransaction[];
+}
+
 interface CurrencyStats {
   currency: string;
   total: number;
@@ -18,6 +26,7 @@ interface CurrencyStats {
   weeklyAvg: number;
   activeCount: number;
   visibleItems: NormalizedTransaction[];
+  weeks: WeekBreakdown[];
 }
 
 function computeStats(
@@ -40,6 +49,10 @@ function computeStats(
     let total = 0;
     let dayCount = 0;
     let weekCount = 0;
+    const weekMap = new Map<
+      string,
+      { total: number; count: number; items: NormalizedTransaction[] }
+    >();
     if (active.length > 0) {
       total = active.reduce((s, t) => s + t.amount, 0);
       const dates = active.map((t) => t.date).sort();
@@ -51,14 +64,38 @@ function computeStats(
           (maxDate.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24)
         ) + 1
       );
-      const weeks = new Set<string>();
       for (const t of active) {
-        weeks.add(formatDate(getWeekStart(new Date(t.date))));
+        const ws = formatDate(getWeekStart(new Date(t.date)));
+        const entry = weekMap.get(ws);
+        if (entry) {
+          entry.total += t.amount;
+          entry.count += 1;
+          entry.items.push(t);
+        } else {
+          weekMap.set(ws, { total: t.amount, count: 1, items: [t] });
+        }
       }
-      weekCount = Math.max(1, weeks.size);
+      weekCount = Math.max(1, weekMap.size);
     }
 
     const visibleItems = [...list].sort((a, b) => b.amount - a.amount);
+
+    const weeks: WeekBreakdown[] = Array.from(weekMap.entries())
+      .map(([weekStart, v]) => {
+        const end = new Date(weekStart);
+        end.setDate(end.getDate() + 6);
+        const top = [...v.items]
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 3);
+        return {
+          weekStart,
+          weekEnd: formatDate(end),
+          total: v.total,
+          count: v.count,
+          top,
+        };
+      })
+      .sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
 
     stats.push({
       currency,
@@ -66,9 +103,10 @@ function computeStats(
       dayCount,
       weekCount,
       dailyAvg: dayCount > 0 ? total / dayCount : 0,
-      weeklyAvg: weekCount > 0 ? total / weekCount : 0,
+      weeklyAvg: dayCount > 0 ? (total / dayCount) * 7 : 0,
       activeCount: active.length,
       visibleItems,
+      weeks,
     });
   }
 
@@ -169,6 +207,104 @@ function CurrencyBlock({
           value={formatAmount(stats.weeklyAvg, stats.currency)}
         />
       </div>
+
+      {stats.weeks.length > 0 && (
+        <>
+          <div
+            style={{
+              padding: "12px 18px",
+              background: "var(--bg)",
+              borderTop: "1px solid var(--border)",
+              fontSize: 11,
+              color: "var(--text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Totales semanales
+          </div>
+          <div style={{ background: "var(--bg)" }}>
+            {stats.weeks.map((w) => (
+              <div
+                key={w.weekStart}
+                style={{ borderTop: "1px solid var(--row-border)" }}
+              >
+                <div
+                  className="tabular"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto auto",
+                    gap: 12,
+                    padding: "8px 18px",
+                    alignItems: "baseline",
+                  }}
+                >
+                  <div>
+                    <span style={{ fontWeight: 500 }}>
+                      {w.weekStart} → {w.weekEnd}
+                    </span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 11 }}>
+                    {w.count} {w.count === 1 ? "tx" : "txs"}
+                  </div>
+                  <div
+                    style={{
+                      fontWeight: 500,
+                      minWidth: 130,
+                      textAlign: "right",
+                    }}
+                  >
+                    {formatAmount(w.total, stats.currency)}
+                  </div>
+                </div>
+                {w.top.length > 0 && (
+                  <div style={{ padding: "0 18px 8px" }}>
+                    {w.top.map((tx, i) => (
+                      <div
+                        key={i}
+                        className="tabular"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "20px 1fr auto",
+                          gap: 12,
+                          padding: "3px 0",
+                          fontSize: 12,
+                          color: "var(--text-muted)",
+                          alignItems: "baseline",
+                        }}
+                        title={tx.description}
+                      >
+                        <div style={{ textAlign: "right" }}>{i + 1}.</div>
+                        <div
+                          style={{
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {tx.description}
+                        </div>
+                        <div
+                          style={{
+                            minWidth: 130,
+                            textAlign: "right",
+                            color:
+                              tx.amount < 0
+                                ? "var(--accent-positive)"
+                                : "var(--text)",
+                          }}
+                        >
+                          {formatAmount(tx.amount, stats.currency)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div
         style={{
