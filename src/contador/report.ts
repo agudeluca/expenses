@@ -100,6 +100,40 @@ export function buildYearMatrices(txs: NormalizedTransaction[]): YearMatrix[] {
   );
 }
 
+// Saldo de cierre de la caja de ahorro por año/mes: el balance del último
+// movimiento (cronológico) de cada mes. `meta.balance` es el saldo parcial que
+// trae cada movimiento del extracto. El último de cada mes = saldo al cierre.
+export function closingBalancesByYear(
+  txs: NormalizedTransaction[]
+): Map<string, Map<number, number>> {
+  const byYear = new Map<string, Map<number, number>>();
+
+  // Orden cronológico ascendente; el sort es estable, así que para movimientos
+  // de la misma fecha se preserva el orden del extracto (ya cronológico) y el
+  // último en ganar es el más reciente del mes.
+  const extracto = txs
+    .filter(
+      (t) =>
+        t.source === "galicia-extracto" && typeof t.meta?.balance === "number"
+    )
+    .slice()
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  for (const tx of extracto) {
+    const year = tx.date.slice(0, 4);
+    const month = parseInt(tx.date.slice(5, 7), 10) - 1;
+    if (!year || Number.isNaN(month)) continue;
+    let months = byYear.get(year);
+    if (!months) {
+      months = new Map();
+      byYear.set(year, months);
+    }
+    months.set(month, tx.meta!.balance as number); // último gana
+  }
+
+  return byYear;
+}
+
 // Deuda al cierre: TOTAL A PAGAR del último resumen del año (best-effort).
 function debtForYear(
   statements: StatementSummary[],
@@ -115,15 +149,19 @@ function debtForYear(
 
 export function buildYearSheet(
   ym: YearMatrix,
-  statements: StatementSummary[]
+  statements: StatementSummary[],
+  closingBalances?: Map<number, number>
 ): XLSX.WorkSheet {
   const cols = ym.columns;
+  // Columna de saldo de caja de ahorro: solo si hay extracto para el año.
+  const hasSaldo = !!closingBalances && closingBalances.size > 0;
 
   const header = [
     `Consumo tarjeta crédito ${ym.year}`,
     ...cols.map((c) => `${c.label} (${c.currency})`),
     "Total ARS",
     "Total USD",
+    ...(hasSaldo ? ["Saldo caja de ahorro (ARS)"] : []),
   ];
 
   const aoa: (string | number)[][] = [header];
@@ -145,6 +183,10 @@ export function buildYearSheet(
       else if (c.currency === "USD") totalUSD += v;
     }
     row.push(round2(totalARS), round2(totalUSD));
+    if (hasSaldo) {
+      const saldo = closingBalances!.get(m);
+      row.push(saldo === undefined ? "" : round2(saldo));
+    }
     annualARS += totalARS;
     annualUSD += totalUSD;
     aoa.push(row);
@@ -153,6 +195,12 @@ export function buildYearSheet(
   const totalRow: (string | number)[] = ["Total anual"];
   for (const c of cols) totalRow.push(round2(annual.get(c.key) ?? 0));
   totalRow.push(round2(annualARS), round2(annualUSD));
+  // El saldo no es una suma: en "Total anual" mostramos el saldo al cierre del
+  // año (el último mes con movimiento).
+  if (hasSaldo) {
+    const lastMonth = Math.max(...closingBalances!.keys());
+    totalRow.push(round2(closingBalances!.get(lastMonth)!));
+  }
   aoa.push(totalRow);
 
   const debt = debtForYear(statements, ym.year);
@@ -161,6 +209,7 @@ export function buildYearSheet(
   ];
   for (const _ of cols) debtRow.push("");
   debtRow.push(debt ? round2(debt.ars) : "", debt ? round2(debt.usd) : "");
+  if (hasSaldo) debtRow.push("");
   aoa.push(debtRow);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -170,6 +219,7 @@ export function buildYearSheet(
     ...cols.map(() => ({ wch: 18 })),
     { wch: 16 },
     { wch: 14 },
+    ...(hasSaldo ? [{ wch: 24 }] : []),
   ];
   return ws;
 }
@@ -185,10 +235,12 @@ export function writeContadorReports(
 
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
+  const closing = closingBalancesByYear(txs);
+
   const written: string[] = [];
   for (const ym of matrices) {
     const wb = XLSX.utils.book_new();
-    const ws = buildYearSheet(ym, statements);
+    const ws = buildYearSheet(ym, statements, closing.get(ym.year));
     XLSX.utils.book_append_sheet(wb, ws, ym.year);
     const file = path.join(outDir, `contador-${ym.year}.xlsx`);
     XLSX.writeFile(wb, file);

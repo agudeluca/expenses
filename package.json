@@ -5,6 +5,7 @@
     "build": "npx ts-node src/build-data.ts",
     "validate": "npx ts-node src/validate.ts",
     "web": "npm run build && vite",
+    "all": "npm run build && npm run validate && vite",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"

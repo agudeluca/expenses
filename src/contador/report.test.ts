@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
 import { NormalizedTransaction } from "../shared";
 import { StatementSummary } from "../credito/index";
-import { buildYearMatrices, buildYearSheet } from "./report";
+import {
+  buildYearMatrices,
+  buildYearSheet,
+  closingBalancesByYear,
+} from "./report";
 
 function credito(
   date: string,
@@ -110,5 +114,62 @@ describe("buildYearSheet", () => {
     );
     expect(debtRow?.[0]).toContain("2026-02");
     expect(debtRow?.[debtRow.length - 2]).toBe(1500); // Total ARS
+  });
+
+  it("agrega columna 'Saldo caja de ahorro' con el saldo de cierre de cada mes", () => {
+    const [ym] = buildYearMatrices([
+      credito("2026-01-05", "Visa 0234", 1000, "ARS"),
+    ]);
+    const extracto = (date: string, balance: number): NormalizedTransaction => ({
+      date,
+      description: "mov",
+      amount: 100,
+      currency: "ARS",
+      source: "galicia-extracto",
+      meta: { balance },
+    });
+    const txs = [
+      extracto("2026-01-10", 5000),
+      extracto("2026-01-25", 7000), // último de enero → saldo de cierre
+    ];
+    const closing = closingBalancesByYear(txs);
+    expect(closing.get("2026")?.get(0)).toBe(7000); // Enero
+
+    const ws = buildYearSheet(ym, [], closing.get("2026"));
+    const aoa = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1 });
+
+    // La columna de saldo es la última.
+    expect(aoa[0][aoa[0].length - 1]).toBe("Saldo caja de ahorro (ARS)");
+    const enero = aoa.find((r) => r[0] === "Enero");
+    expect(enero?.[enero.length - 1]).toBe(7000); // saldo de cierre de enero
+    const febrero = aoa.find((r) => r[0] === "Febrero");
+    expect(febrero?.[febrero.length - 1]).toBe(""); // sin movimientos
+    const totalRow = aoa.find((r) => r[0] === "Total anual");
+    expect(totalRow?.[totalRow.length - 1]).toBe(7000); // saldo al cierre del año
+  });
+});
+
+describe("closingBalancesByYear", () => {
+  it("toma el último movimiento cronológico de cada mes e ignora otras fuentes", () => {
+    const tx = (
+      date: string,
+      source: NormalizedTransaction["source"],
+      balance?: number
+    ): NormalizedTransaction => ({
+      date,
+      description: "x",
+      amount: 1,
+      currency: "ARS",
+      source,
+      meta: balance === undefined ? {} : { balance },
+    });
+    const closing = closingBalancesByYear([
+      tx("2026-02-28", "galicia-extracto", 9000),
+      tx("2026-02-01", "galicia-extracto", 3000),
+      tx("2026-01-15", "galicia-extracto", 1000),
+      tx("2026-02-10", "galicia-credito", 999), // se ignora
+    ]);
+    expect(closing.get("2026")?.get(0)).toBe(1000); // Enero
+    expect(closing.get("2026")?.get(1)).toBe(9000); // Febrero (28 > 01)
   });
 });
