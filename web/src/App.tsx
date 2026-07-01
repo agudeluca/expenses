@@ -42,6 +42,12 @@ export function App(): JSX.Element {
     return Array.from(s).sort();
   }, [items]);
 
+  const availableMonths = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of items) s.add(t.date.slice(0, 7));
+    return Array.from(s).sort().reverse();
+  }, [items]);
+
   if (error) {
     return (
       <div style={{ padding: 40 }}>
@@ -83,6 +89,9 @@ export function App(): JSX.Element {
         setSources={f.setSources}
         currencies={f.currencies}
         setCurrencies={f.setCurrencies}
+        months={f.months}
+        setMonths={f.setMonths}
+        availableMonths={availableMonths}
         hideIncome={f.hideIncome}
         setHideIncome={f.setHideIncome}
         availableCurrencies={availableCurrencies}

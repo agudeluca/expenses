@@ -6,6 +6,7 @@ const K = {
   query: "expenses.filters.query.v1",
   sources: "expenses.filters.sources.v1",
   currencies: "expenses.filters.currencies.v1",
+  months: "expenses.filters.months.v1",
   hideIncome: "expenses.filters.hideIncome.v1",
   sortBy: "expenses.filters.sortBy.v1",
   sortDir: "expenses.filters.sortDir.v1",
@@ -18,6 +19,7 @@ export interface FilterState {
   query: string;
   sources: Set<Source>;
   currencies: Set<string>;
+  months: Set<string>;
   hideIncome: boolean;
   sortBy: SortBy;
   sortDir: SortDir;
@@ -31,6 +33,7 @@ export function applyFilters(
   const filtered = items.filter((t) => {
     if (f.sources.size > 0 && !f.sources.has(t.source)) return false;
     if (f.currencies.size > 0 && !f.currencies.has(t.currency)) return false;
+    if (f.months.size > 0 && !f.months.has(t.date.slice(0, 7))) return false;
     if (f.hideIncome && t.amount <= 0) return false;
     if (q && !t.description.toLowerCase().includes(q)) return false;
     return true;
@@ -60,6 +63,11 @@ export function useFilters(items: NormalizedTransaction[]) {
     new Set(),
     setCodec<string>()
   );
+  const [months, setMonths] = usePersistedState<Set<string>>(
+    K.months,
+    new Set(),
+    setCodec<string>()
+  );
   const [hideIncome, setHideIncome] = usePersistedState<boolean>(
     K.hideIncome,
     false
@@ -71,6 +79,7 @@ export function useFilters(items: NormalizedTransaction[]) {
     query,
     sources,
     currencies,
+    months,
     hideIncome,
     sortBy,
     sortDir,
@@ -81,6 +90,7 @@ export function useFilters(items: NormalizedTransaction[]) {
     query,
     sources,
     currencies,
+    months,
     hideIncome,
     sortBy,
     sortDir,
@@ -99,6 +109,7 @@ export function useFilters(items: NormalizedTransaction[]) {
     setQuery("");
     setSources(new Set());
     setCurrencies(new Set());
+    setMonths(new Set());
     setHideIncome(false);
   }
 
@@ -106,6 +117,7 @@ export function useFilters(items: NormalizedTransaction[]) {
     query.length > 0 ||
     sources.size > 0 ||
     currencies.size > 0 ||
+    months.size > 0 ||
     hideIncome;
 
   return {
@@ -116,6 +128,8 @@ export function useFilters(items: NormalizedTransaction[]) {
     setSources,
     currencies,
     setCurrencies,
+    months,
+    setMonths,
     hideIncome,
     setHideIncome,
     sortBy,

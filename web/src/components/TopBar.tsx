@@ -7,6 +7,27 @@ const SOURCE_LABEL: Record<Source, string> = {
   "galicia-credito": "Crédito",
 };
 
+const MONTH_NAMES = [
+  "Ene",
+  "Feb",
+  "Mar",
+  "Abr",
+  "May",
+  "Jun",
+  "Jul",
+  "Ago",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dic",
+];
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  const name = MONTH_NAMES[Number(m) - 1] ?? m;
+  return `${name} ${y}`;
+}
+
 interface Props {
   query: string;
   setQuery: (q: string) => void;
@@ -14,6 +35,9 @@ interface Props {
   setSources: (s: Set<Source>) => void;
   currencies: Set<string>;
   setCurrencies: (s: Set<string>) => void;
+  months: Set<string>;
+  setMonths: (s: Set<string>) => void;
+  availableMonths: string[];
   hideIncome: boolean;
   setHideIncome: (v: boolean) => void;
   availableCurrencies: string[];
@@ -33,6 +57,9 @@ export function TopBar({
   setSources,
   currencies,
   setCurrencies,
+  months,
+  setMonths,
+  availableMonths,
   hideIncome,
   setHideIncome,
   availableCurrencies,
@@ -81,6 +108,20 @@ export function TopBar({
           onToggle={(v) => setCurrencies(toggle(currencies, v))}
         />
       </div>
+
+      {availableMonths.length > 0 && (
+        <div className="filter-group">
+          <span className="filter-group-label">Período</span>
+          <ChipGroup
+            all={availableMonths}
+            labels={Object.fromEntries(
+              availableMonths.map((m) => [m, monthLabel(m)])
+            )}
+            selected={months}
+            onToggle={(v) => setMonths(toggle(months, v))}
+          />
+        </div>
+      )}
 
       <div className="topbar-row">
         <label className="pill">
